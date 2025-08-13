@@ -1,22 +1,20 @@
-# filter_9x9_sgf.py
-# Python 3.x
 from pathlib import Path
 import re, hashlib, shutil
 
-# === 1) 修改为你的SGF所在文件夹 & 输出文件夹 ===
+# 修改为你的SGF所在文件夹 & 输出文件夹
 INPUT_DIR = Path(r"D:\katago_old\9x9_online_go_game")   # 这里改成你的SGF文件夹
 OUTPUT_DIR = Path(r"D:\katago_old\9x9_online_go_game\output")   # 这里改成你想保存9路SGF的文件夹
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# === 2) 正则：匹配 9x9 棋盘 ===
+# 匹配 9x9 棋盘
 # 兼容 SZ[9] 或 SZ[9:9]，允许空白；大小写不敏感
 re_sz9 = re.compile(rb"SZ\s*\[\s*9(\s*:\s*9)?\s*\]", re.IGNORECASE)
 
-# 可选：如果出现 GM 标签，则要求 GM[1]（围棋）
+# 如果出现 GM 标签，则要求 GM[1]（围棋）
 re_gm  = re.compile(rb"GM\s*\[\s*(\d+)\s*\]", re.IGNORECASE)
 
 def is_go_game(data: bytes) -> bool:
-    """若文件中出现 GM[]，则要求为 GM[1]；若未出现 GM，则默认当作围棋"""
+    # 若文件中出现 GM[]，则要求为 GM[1]；若未出现 GM，则默认当作围棋
     m = re_gm.search(data)
     if not m:
         return True
@@ -42,7 +40,7 @@ for p in INPUT_DIR.rglob("*.sgf"):
         bad += 1
         continue
 
-    # 粗检查：应当含有括号与节点
+    # 检查：应当含有括号与节点
     if b"(" not in data or b")" not in data:
         bad += 1
         continue
