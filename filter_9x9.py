@@ -1,20 +1,16 @@
 from pathlib import Path
 import re, hashlib, shutil
 
-# 修改为你的SGF所在文件夹 & 输出文件夹
-INPUT_DIR = Path(r"D:\katago_old\9x9_online_go_game")   # 这里改成你的SGF文件夹
-OUTPUT_DIR = Path(r"D:\katago_old\9x9_online_go_game\output")   # 这里改成你想保存9路SGF的文件夹
+INPUT_DIR = Path(r"D:\katago_old\9x9_online_go_game")   # change it to the folder where your sgf files are located
+OUTPUT_DIR = Path(r"D:\katago_old\9x9_online_go_game\output")   # change it to the folder where you want to save for sgf files of board size 9
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# 匹配 9x9 棋盘
-# 兼容 SZ[9] 或 SZ[9:9]，允许空白；大小写不敏感
+# match sgf of board size 9
 re_sz9 = re.compile(rb"SZ\s*\[\s*9(\s*:\s*9)?\s*\]", re.IGNORECASE)
 
-# 如果出现 GM 标签，则要求 GM[1]（围棋）
 re_gm  = re.compile(rb"GM\s*\[\s*(\d+)\s*\]", re.IGNORECASE)
 
 def is_go_game(data: bytes) -> bool:
-    # 若文件中出现 GM[]，则要求为 GM[1]；若未出现 GM，则默认当作围棋
     m = re_gm.search(data)
     if not m:
         return True
@@ -40,7 +36,6 @@ for p in INPUT_DIR.rglob("*.sgf"):
         bad += 1
         continue
 
-    # 检查：应当含有括号与节点
     if b"(" not in data or b")" not in data:
         bad += 1
         continue
@@ -53,7 +48,7 @@ for p in INPUT_DIR.rglob("*.sgf"):
         skipped += 1
         continue
 
-    # 去重：按内容哈希保存，避免同名覆盖
+    # eliminate repeated file name using hashes
     h = sha1_bytes(data)
     if h in seen_hashes:
         continue
