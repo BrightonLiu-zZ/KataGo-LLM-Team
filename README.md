@@ -7,25 +7,37 @@ Pipeline:
 2. (analysis.cfg) put this configuration file in the same folder where everything is located
 3. copy and paste those line by line to your terminal (ignore comments), wait for a long time, then you will get a .jsonl file (json_output_with_top_k.jsonl), that's what we want: 
 
-# Configuration paths (please change to your own)
+##### Configuration paths (please change to your own)
 $KataGoExe   = "D:\katago_old\lizzie\katago.exe"
+
 $ModelFile   = "D:\katago_old\lizzie\KataGo18b9x9.gz"
+
 $ConfigFile  = "D:\katago_old\lizzie\analysis.cfg"
+
 $InputJsonl  = "D:\katago_old\lizzie\katago_input.jsonl"
+
 $OutputJsonl = "D:\katago_old\lizzie\katago_output.jsonl"
 
-# Check if those files exist (false -->you have  inputed wrong paths)
+##### Check if those files exist (false -->you have  inputed wrong paths)
 "exe:       " + (Test-Path $KataGoExe)
+
 "model:     " + (Test-Path $ModelFile)
+
 "config:    " + (Test-Path $ConfigFile)
+
 "inputjson: " + (Test-Path $InputJsonl)
 
-# Run it
+###### Run it (make sure to keep those tabs)
 Get-Content $InputJsonl -Raw |
+
   & $KataGoExe analysis `
+
       -config $ConfigFile `
+
       -model  $ModelFile `
+
       -analysis-threads 1 |
+
   Set-Content $OutputJsonl
 
 ---
