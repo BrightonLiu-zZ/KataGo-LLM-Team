@@ -1,7 +1,3 @@
-Here’s a clean, copy-paste-ready `README.md` that documents the full pipeline—from data acquiring to preprocessing/quality-filtering to GRPO model training—using the files you listed.
-
----
-
 # KataGo × LLM Project
 
 **Goal:** teach an instruction-tuned LLM to suggest and *explain* strong 9×9 Go moves, using KataGo to label positions and a Group Relative Policy Optimization (GRPO) trainer to align the model with KataGo-derived rewards.
