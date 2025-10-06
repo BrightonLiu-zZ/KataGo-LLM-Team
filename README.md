@@ -12,20 +12,43 @@ Here’s a clean, copy-paste-ready `README.md` that documents the full pipeline�
 
 ## TL;DR pipeline
 
-```mermaid
-flowchart LR
-  A[Raw SGF (mixed sizes)] --> B[script/data_acquiring/filter_9x9.py]
-  B --> C[9x9 SGF only]
-  C --> D[script/data_acquiring/total_move_histogram.py]
-  D --> E{choose move-range to keep}
-  E --> F[script/data_acquiring/pick_random_sgf_based_on_total_move.py]
-  F --> G[script/data_acquiring/label_and_select.py<br/>+ src/katago.exe + analysis.cfg + KataGo18b9x9.gz]
-  G --> H[script/data_acquiring/compute_metrics_from_topk.py]
-  H --> I[script/data_acquiring/build_filtered_training_zh_final.py]
-  I --> J[data/cleaned_katago_output.jsonl]
-  J --> K[script/model_training/model_training_first_trial.py]
-  J --> L[grpo_vlm.py (improved GRPO trainer)]
-```
+**Skeleton of the end-to-end process**
+
+1) **Filter to 9×9 SGFs**  
+   - **Script:** `script/data_acquiring/filter_9x9.py`  
+   - **Input:** Raw SGF folder (mixed board sizes)  
+   - **Output:** 9×9-only SGF folder
+
+2) **Inspect game lengths & pick window**  
+   - **Script:** `script/data_acquiring/total_move_histogram.py`  
+   - **Input:** 9×9 SGF folder  
+   - **Output:** Histogram → choose move-count window (e.g., 20–70)
+
+3) **Subsample by move range (balanced)**  
+   - **Script:** `script/data_acquiring/pick_random_sgf_based_on_total_move.py`  
+   - **Input:** 9×9 SGF folder, chosen window  
+   - **Output:** `sgf_list_20_70.txt` (optionally archived as `data/20_70_filtered.7z`)
+
+4) **Label positions with KataGo (top-k)**  
+   - **Script:** `script/data_acquiring/label_and_select.py`  
+   - **Uses:** `src/katago.exe`, `script/data_acquiring/analysis.cfg`, `src/KataGo18b9x9.gz`  
+   - **Output:** `katago_labeled_raw.jsonl`
+
+5) **Compute quality metrics**  
+   - **Script:** `script/data_acquiring/compute_metrics_from_topk.py`  
+   - **Input:** `katago_labeled_raw.jsonl`  
+   - **Output:** `katago_labeled_with_metrics.jsonl`
+
+6) **Filter & build final training JSONL**  
+   - **Script:** `script/data_acquiring/build_filtered_training_zh_final.py`  
+   - **Input:** `katago_labeled_with_metrics.jsonl`  
+   - **Output:** `data/cleaned_katago_output.jsonl` (keeps diverse/meaningful states, downweights one-sided)
+
+7) **Train the model (GRPO)**  
+   - **Script (baseline):** `script/model_training/model_training_first_trial.py`  
+   - **Script (current):** `grpo_vlm.py`  
+   - **Input:** `data/cleaned_katago_output.jsonl`  
+   - **Output:** checkpoints under `runs/...`
 
 ---
 
