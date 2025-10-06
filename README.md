@@ -1,6 +1,6 @@
 # KataGo × LLM Project
 
-**Goal:** teach an instruction-tuned LLM to suggest and *explain* strong 9×9 Go moves, using KataGo to label positions and a Group Relative Policy Optimization (GRPO) trainer to align the model with KataGo-derived rewards.
+**Goal:** teach an instruction-tuned LLM to suggest and *explain* Go moves, using KataGo to label positions and a Group Relative Policy Optimization (GRPO) trainer to align the model with KataGo-derived rewards.
 
 <p align="center">
   <img alt="pipeline" src="https://dummyimage.com/820x2/eee/eee.png&text=">
@@ -41,42 +41,9 @@
    - **Output:** `data/cleaned_katago_output.jsonl` (keeps diverse/meaningful states, downweights one-sided)
 
 7) **Train the model (GRPO)**  
-   - **Script (baseline):** `script/model_training/model_training_first_trial.py`  
-   - **Script (current):** `grpo_vlm.py`  
+   - **Script:** `script/model_training/model_training_first_trial.py`  
    - **Input:** `data/cleaned_katago_output.jsonl`  
    - **Output:** checkpoints under `runs/...`
-
----
-
-## Repository layout
-
-```
-.
-|-- grpo_vlm.py                      # GRPO training script (current)
-|-- README.md                        # (this file)
-|
-|-- data/
-|   |-- 20_70_filtered.7z            # 9x9 data package (compressed)
-|   `-- cleaned_katago_output.jsonl  # cleaned, high-quality JSONL for training
-|
-|-- script/
-|   |-- data_acquiring/
-|   |   |-- analysis.cfg
-|   |   |-- build_filtered_training_zh_final.py
-|   |   |-- compute_metrics_from_topk.py
-|   |   |-- data_mining.py
-|   |   |-- filter_9x9.py
-|   |   |-- label_and_select.py
-|   |   |-- pick_random_sgf_based_on_total_move.py
-|   |   `-- total_move_histogram.py
-|   |
-|   `-- model_training/
-|       `-- model_training_first_trial.py  # first GRPO attempt (baseline)
-|
-`-- src/
-    |-- katago.exe                 # KataGo engine (Windows)
-    `-- KataGo18b9x9.gz            # KataGo 18B 9x9 weights
-```
 
 ---
 
@@ -386,13 +353,3 @@ python .\grpo_vlm.py --train_jsonl ".\data\cleaned_katago_output.jsonl" --base_m
 * **KataGo** for world-class Go analysis.
 * **TRL** (Hugging Face) for GRPO implementations.
 * **Qwen** for strong instruction base models.
-
----
-
-## 11) License
-
-This repository is for research/educational use. Please respect third-party licenses (KataGo, base LLM weights) when redistributing data or checkpoints.
-
----
-
-**Contact:** open an issue or PR if you find a bug or want to add a feature (e.g., 19×19 support, English prompts, richer rationales, better reward shaping).
