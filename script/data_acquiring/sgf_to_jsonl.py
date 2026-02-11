@@ -4,7 +4,7 @@ import json
 from sgfmill import sgf
 
 #SGF_DIR = Path(r"D:\katago_old\lizzie") # change to the folder where your sgf are located
-SGF_DIR = Path(r"C:\git_repo\KataGo-LLM-Team\data\20_70_filtered.7z")
+SGF_DIR = Path(r"C:\git_repo\KataGo-LLM-Team\data\20_70_filtered")
 OUT_JSONL = Path(r"C:\git_repo\KataGo-LLM-Team\data\json_output.jsonl")  # path to the .jsonl file that you will give KataGO
 STEP_INTERVAL = 1 # generate an request for each move in a game
 
