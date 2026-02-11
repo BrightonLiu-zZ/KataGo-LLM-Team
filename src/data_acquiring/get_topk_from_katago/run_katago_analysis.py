@@ -10,7 +10,7 @@ MAX_LIMIT = 10000
 
 # 2. 核心路径 (请确认你的 9x9 模型文件名是否正确)
 KATAGO_EXE = r"C:\git_repo\KataGo-LLM-Team\KataGo_engine\katago.exe"
-CONFIG_FILE = r"C:\git_repo\KataGo-LLM-Team\script\data_acquiring\analysis.cfg"
+CONFIG_FILE = r"C:\git_repo\KataGo-LLM-Team\script\get_topk_from_katago\analysis.cfg"
 MODEL_FILE = r"C:\git_repo\KataGo-LLM-Team\KataGo_engine\KataGo18b9x9.gz"
 
 # 3. 输入输出

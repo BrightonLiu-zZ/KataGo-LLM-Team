@@ -2,3 +2,6 @@
 data/*
 
 KataGo_engine/*
+
+# Prevent pushing all files from src/data_acquiring/old_scripts
+src/data_acquiring/old_scripts/
