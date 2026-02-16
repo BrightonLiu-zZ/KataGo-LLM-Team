@@ -78,11 +78,25 @@ def katago_outcome_reward_func(prompts, completions, katago_all, **kwargs) -> Li
         if isinstance(k_data, str):
             try: k_data = json.loads(k_data)
             except: k_data = {}
-        
+
         # 2. 命中 Top 10 -> 奖励
         if move in k_data:
-            winrate = float(k_data[move])
-            score = (winrate - 0.5) * 2.0 
+            current_winrate = float(k_data[move])
+            
+            # 找出 Top K 里最好的那个胜率是多少
+            # (注意：k_data 的 value 可能是字符串，要转 float)
+            all_winrates = [float(v) for v in k_data.values()]
+            best_possible_winrate = max(all_winrates) if all_winrates else 1.0
+            
+            # 防止除以 0 (虽然极少见，但为了代码健壮性)
+            if best_possible_winrate < 0.001:
+                score = 1.0 # 如果大家都必输，你能命中 Top K 依然值得给满分
+            else:
+                # 相对分数：你的胜率 / 最好胜率
+                # 例子：局面很差，最高胜率只有 0.1。你走出了 0.1 的棋。
+                # score = 0.1 / 0.1 = 1.0 (满分！)
+                score = current_winrate / best_possible_winrate
+            
             rewards.append(score)
         
         # 3. 没命中 Top 10，但是个合法的围棋坐标 -> 轻罚 (关键修改!)
