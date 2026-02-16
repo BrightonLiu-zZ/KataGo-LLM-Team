@@ -1,4 +1,3 @@
-import os
 import re
 import json
 import torch
@@ -6,143 +5,177 @@ from dataclasses import dataclass, field
 from typing import Optional, List, Dict
 
 from datasets import load_dataset
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from peft import LoraConfig, get_peft_model
+from transformers import AutoTokenizer
+from peft import LoraConfig
 from trl import GRPOTrainer, GRPOConfig
 
-# ================= 配置区域 =================
-# 你的数据集路径
-DATASET_PATH = "data/training_ready_data_shuffled.jsonl" 
-# 模型路径 (首次运行会自动下载)
+# ================= 1. 配置区域 (Configuration) =================
+# 路径配置
+DATASET_PATH = "data/training_data_final_shuffled.jsonl" # 你的最终打乱数据
 MODEL_NAME = "Qwen/Qwen2.5-7B-Instruct"
-# 输出目录
-OUTPUT_DIR = "runs/Qwen2.5-7B-GRPO-Go-v1"
+OUTPUT_DIR = "runs/Qwen2.5-7B-GRPO-Go-Pro-v1"
 
+# 9x9 围棋坐标系 (不包含 'I')
+VALID_COLS = set("ABCDEFGHJ") 
+VALID_ROWS = set(str(i) for i in range(1, 10))
+
+# System Prompt 强化：要求它像高手一样思考
 SYSTEM_PROMPT = (
-    "You are a world-class 9x9 Go expert. "
-    "Before answering, strictly perform chain-of-thought reasoning within <think>...</think> tags. "
-    "Analyze the board geometry, liberties, and safety of groups. "
-    "Finally, output the move and a strategic explanation.\n\n"
-    "Format Example:\n"
-    "<think>\nThe black group on top needs eyespace. D7 is vital for defense...\n</think>\n"
-    "MOVE: D7\n"
-    "EXPLAIN: Expands eye space and threatens to cut.\n\n"
-    "Now, analyze the board below:"
+    "You are a professional 9x9 Go player. "
+    "Your goal is to find the best move in the current position.\n"
+    "1. FIRST, think silently about the board status, liberties, and territory in <think> tags.\n"
+    "2. THEN, output your move strictly in 'MOVE: XY' format (e.g., MOVE: C4 or MOVE: pass).\n"
+    "3. FINALLY, provide a short explanation starting with 'EXPLAIN:'."
 )
 
-# ================= 辅助函数 =================
+# ================= 2. 核心辅助函数 (Utilities) =================
+
+def is_valid_9x9_coord(coord: str) -> bool:
+    """严格检查是否为 9x9 合法坐标"""
+    coord = coord.upper().strip()
+    if coord == "PASS": return True
+    if len(coord) < 2: return False
+    col, row = coord[0], coord[1:]
+    return (col in VALID_COLS) and (row in VALID_ROWS)
 
 def extract_move(text: str) -> Optional[str]:
-    """使用正则提取 MOVE: 后的坐标"""
-    # 匹配 "MOVE: C4" 或 "MOVE:C4" 或 "MOVE: c4"，忽略大小写
-    match = re.search(r"MOVE:\s*([A-HJ-T][1-9])", text, re.IGNORECASE)
+    """提取 MOVE，增加对 'pass' 的支持，并进行 9x9 校验"""
+    # 匹配 MOVE: C4, MOVE: pass, Move: A1 等
+    match = re.search(r"MOVE:\s*([a-zA-Z][0-9]+|pass)", text, re.IGNORECASE)
     if match:
-        return match.group(1).upper()
+        move = match.group(1).upper()
+        if is_valid_9x9_coord(move):
+            return move
     return None
 
-def check_format(text: str) -> bool:
-    """检查是否符合 <think>...MOVE...EXPLAIN 格式"""
-    if "<think>" not in text or "</think>" not in text:
-        return False
-    if "MOVE:" not in text:
-        return False
-    if "EXPLAIN:" not in text:
-        return False
-    return True
+def extract_think_content(text: str) -> str:
+    """提取 <think> 内部的内容用于分析"""
+    match = re.search(r"<think>(.*?)</think>", text, re.DOTALL)
+    return match.group(1).strip() if match else ""
 
-# ================= 奖励函数 (Reward Functions) =================
-# TRL 会自动把数据集里的列作为参数传进来 (例如 katago_all)
+# ================= 3. 奖励函数群 (The Reward Engineering) =================
 
+# --- A. 格式奖励 (基础) ---
 def format_reward_func(completions, **kwargs) -> List[float]:
-    """奖励 1: 格式检查"""
+    """
+    检查结构完整性。
+    奖励设计：
+    - 完整结构 (+0.5)
+    - 缺少特定标签 (-0.5 per missing tag)
+    """
     rewards = []
     for content in completions:
-        # 如果格式完美，给 +0.5 的小奖励；如果格式崩了，给 -1.0 惩罚
-        if check_format(content):
-            rewards.append(0.5)
+        score = 0.0
+        # 必须有的标签
+        tags = ["<think>", "</think>", "MOVE:", "EXPLAIN:"]
+        missing = [t for t in tags if t not in content]
+        
+        if not missing:
+            score = 0.5
         else:
-            rewards.append(-1.0)
+            score -= 0.5 * len(missing) # 缺得越多罚得越重
+            
+        rewards.append(score)
     return rewards
 
-def katago_outcome_reward_func(prompts, completions, katago_all, **kwargs) -> List[float]:
+# --- B. 思考过程奖励 (进阶) ---
+def thinking_quality_reward_func(completions, **kwargs) -> List[float]:
+    """
+    奖励思考的'量' (Lenient Length Reward)。
+    防止模型偷懒(直接输出答案)或产生无限循环幻觉。
+    """
     rewards = []
-    for content, k_data in zip(completions, katago_all):
-        move = extract_move(content) # 提取出的坐标，例如 "C4"
+    for content in completions:
+        think_text = extract_think_content(content)
+        length = len(think_text)
         
-        # 1. 格式错误/没找到坐标 -> 重罚
+        if length == 0:
+            rewards.append(-0.5) # 没思考，扣分
+        elif length < 50:
+            rewards.append(0.0)  # 思考太短，不给分
+        elif 50 <= length <= 500:
+            rewards.append(0.5)  # 黄金思考长度，奖励
+        else:
+            rewards.append(0.0)  # 太长了可能在啰嗦，不给分
+            
+    return rewards
+
+# --- C. 胜率后悔值奖励 (核心 - Regret Based) ---
+def outcome_regret_reward_func(prompts, completions, katago_all, **kwargs) -> List[float]:
+    """
+    核心逻辑：Regret Minimization
+    Reward = 1.0 - (Best_Winrate - Chosen_Move_Winrate)
+    """
+    rewards = []
+    for content, k_data_str in zip(completions, katago_all):
+        # 解析 KataGo 数据 (JSON string -> dict)
+        if isinstance(k_data_str, str):
+            try: k_data = json.loads(k_data_str)
+            except: k_data = {}
+        else:
+            k_data = k_data_str if k_data_str else {}
+
+        move = extract_move(content)
+        
+        # 情况 1: 格式错误或非法坐标
         if move is None:
             rewards.append(-1.0)
             continue
             
-        # 确保 k_data 解析正确
-        if isinstance(k_data, str):
-            try: k_data = json.loads(k_data)
-            except: k_data = {}
-
-        # 2. 命中 Top 10 -> 奖励
-        if move in k_data:
-            current_winrate = float(k_data[move])
-            
-            # 找出 Top K 里最好的那个胜率是多少
-            # (注意：k_data 的 value 可能是字符串，要转 float)
-            all_winrates = [float(v) for v in k_data.values()]
-            best_possible_winrate = max(all_winrates) if all_winrates else 1.0
-            
-            # 防止除以 0 (虽然极少见，但为了代码健壮性)
-            if best_possible_winrate < 0.001:
-                score = 1.0 # 如果大家都必输，你能命中 Top K 依然值得给满分
-            else:
-                # 相对分数：你的胜率 / 最好胜率
-                # 例子：局面很差，最高胜率只有 0.1。你走出了 0.1 的棋。
-                # score = 0.1 / 0.1 = 1.0 (满分！)
-                score = current_winrate / best_possible_winrate
-            
-            rewards.append(score)
+        # 计算当前局面的最佳胜率 (Best Winrate)
+        # 注意：如果 k_data 为空（极少见），假设最佳胜率是 0.5 (模糊)
+        all_winrates = [float(v) for v in k_data.values()]
+        best_wr = max(all_winrates) if all_winrates else 0.5
         
-        # 3. 没命中 Top 10，但是个合法的围棋坐标 -> 轻罚 (关键修改!)
-        # 我们用正则判断它是不是像个坐标 (A-T + 1-9)
-        elif re.match(r"^[A-HJ-T][1-9]$", move): 
-            # 给一个比 -1.0 高，但比任何胜率分都低的分数
-            # 假设最差的胜率是 0 (对应 -1.0)，我们给 -0.5 其实比输棋还好？
-            # 不，逻辑应该是：不在 Top 10 的棋，胜率通常极低。
-            # 我们可以给一个固定的“遗憾分”，比如 -0.8
-            # 只要比 -1.0 (格式错误) 高，模型就会倾向于输出坐标。
-            rewards.append(-0.8) 
+        # 获取模型选择的步法的胜率
+        if move in k_data:
+            chosen_wr = float(k_data[move])
+            # Regret = 最佳 - 当前
+            regret = best_wr - chosen_wr
+            # Reward: 0 regret -> 1.0 score.  0.2 regret -> 0.8 score.
+            # 这是一个非常平滑的梯度
+            rewards.append(1.0 - regret)
             
-        # 4. 提取出了东西但不是坐标 (比如 MOVE: Hello) -> 重罚
         else:
-            rewards.append(-1.0)
+            # 情况 2: 模型下了一步合法棋，但不在 Top-N 推荐里 (Bad Move)
+            # 我们假设这步棋的胜率接近于 0 (或者比最差的推荐还要差)
+            # 为了不过度惩罚（避免梯度爆炸），我们给它一个基于最大Regret的分数
+            # 假设这步棋胜率为 0.0
+            chosen_wr = 0.0
+            regret = best_wr - chosen_wr
+            
+            # 我们给它一个额外的 -0.2 惩罚，告诉它“你甚至没进候选列表”
+            # 但依然比“格式错误(-1.0)”要好，鼓励它输出坐标
+            rewards.append((1.0 - regret) - 0.2) 
             
     return rewards
 
-# ================= 主训练逻辑 =================
+# ================= 4. 主程序 (Main) =================
 
 def main():
-    print(f"Loading dataset from {DATASET_PATH}...")
+    print(f"🔄 Loading dataset from {DATASET_PATH}...")
     dataset = load_dataset("json", data_files=DATASET_PATH, split="train")
 
-    # 1. 数据预处理：把 System Prompt 加进去，构建符合 Qwen 格式的输入
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
     tokenizer.pad_token = tokenizer.eos_token
 
+    # 预处理：应用 Chat Template
     def preprocess_function(examples):
-        # TRL 的 GRPOTrainer 接受 'prompt' 字段
-        # 我们在这里把 System + User 拼好，让模型只负责生成 Assistant 的回复
         formatted_prompts = []
         for user_p in examples["user_prompt"]:
             messages = [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_p}
             ]
-            # apply_chat_template 会生成 <|im_start|>system...<|im_start|>assistant
-            # add_generation_prompt=True 意味着最后会留一个口子给模型生成
+            # add_generation_prompt=True 确保 prompt 停在 <|im_start|>assistant
             prompt_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
             formatted_prompts.append(prompt_text)
         return {"prompt": formatted_prompts}
 
+    # 处理所有数据
     dataset = dataset.map(preprocess_function, batched=True)
 
-    # 2. 配置 LoRA
+    # LoRA 配置
     peft_config = LoraConfig(
         r=16,
         lora_alpha=32,
@@ -152,43 +185,53 @@ def main():
         bias="none",
     )
 
-    # 3. 配置 GRPO
-    # RTX 6000 Ada 显存很大，我们可以直接用 bfloat16 加载模型，不量化，性能最好
+    # GRPO 配置 (针对 RTX 6000 Ada 优化)
     training_args = GRPOConfig(
         output_dir=OUTPUT_DIR,
-        learning_rate=1e-5,
+        learning_rate=5e-6,           # 稍微降低 LR，因为我们有强 Reward 信号
         adam_beta1=0.9,
         adam_beta2=0.99,
         weight_decay=0.1,
         warmup_ratio=0.1,
         lr_scheduler_type="cosine",
         logging_steps=10,
-        bf16=True, # 开启 bfloat16 加速
-        per_device_train_batch_size=1, # 实际 batch = 1 * num_generations
-        gradient_accumulation_steps=4, # 累计梯度
-        num_generations=8,             # Group Size = 8
-        max_completion_length=512,     # 生成长度限制
-        max_prompt_length=1024,
+        bf16=True,                    # 必须开启 BF16
+        per_device_train_batch_size=1, # GRPO batch size = 1 (context is heavy)
+        gradient_accumulation_steps=4, 
+        num_generations=8,            # 每次生成 8 个样本进行对比 (Group Size)
+        max_completion_length=1024,   # 给足够的空间思考 (512 可能有点紧)
+        max_prompt_length=2048,
         save_steps=100,
-        max_steps=500, # Start Small: 先跑 500 步看看效果 (约几小时)
-        report_to="tensorboard", # 或者 "wandb" 如果你有账号
-        use_vllm=False, # 如果安装了 vllm 可以设为 True 加速生成，否则 False
+        max_steps=1000,               # 增加步数，因为数据质量高且增强过
+        report_to="tensorboard",
+        # ⚡ 关键加速: 使用 vLLM
+        # 请确保 pip install vllm
+        use_vllm=True, 
+        vllm_gpu_memory_utilization=0.5, # 留 50% 给训练，50% 给 vLLM 生成
     )
 
-    # 4. 开始训练
+    # 初始化 Trainer
     trainer = GRPOTrainer(
         model=MODEL_NAME,
-        reward_funcs=[format_reward_func, katago_outcome_reward_func],
+        reward_funcs=[
+            format_reward_func,          # 权重 1: 格式
+            thinking_quality_reward_func,# 权重 1: 思考质量
+            outcome_regret_reward_func,  # 权重 1: 核心胜率 Regret
+        ],
         args=training_args,
         train_dataset=dataset,
         peft_config=peft_config,
     )
 
-    print("Starting training...")
+    print("🚀 Starting GRPO training on RTX 6000 Ada...")
+    print(f"   - vLLM Enabled: {training_args.use_vllm}")
+    print(f"   - Reward Functions: Format, Thinking(Len), Regret(Winrate)")
+    
     trainer.train()
     
-    print(f"Training finished. Saving model to {OUTPUT_DIR}")
+    print(f"✅ Training finished. Saving model to {OUTPUT_DIR}")
     trainer.save_model(OUTPUT_DIR)
+    tokenizer.save_pretrained(OUTPUT_DIR)
 
 if __name__ == "__main__":
     main()
