@@ -1,0 +1,9 @@
+.git
+.vscode
+runs/
+data/
+*.safetensors
+*.bin
+*.pth
+__pycache__
+miniconda3/
