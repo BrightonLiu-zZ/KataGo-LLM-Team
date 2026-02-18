@@ -11,7 +11,7 @@ from trl import GRPOTrainer, GRPOConfig
 
 # ================= 1. 配置区域 (Configuration) =================
 # 路径配置
-DATASET_PATH = "data/training_data_final_shuffled.jsonl" # 你的最终打乱数据
+DATASET_PATH = "data/training_data_augmented_shuffled.jsonl" 
 MODEL_NAME = "Qwen/Qwen2.5-7B-Instruct"
 OUTPUT_DIR = "runs/Qwen2.5-7B-GRPO-Go-Pro-v1"
 
@@ -154,11 +154,14 @@ def outcome_regret_reward_func(prompts, completions, katago_all, **kwargs) -> Li
 
 def main():
     print(f"🔄 Loading dataset from {DATASET_PATH}...")
+    if not os.path.exists(DATASET_PATH):
+        print(f"❌ Error: file: {DATASET_PATH} Does not exist！ Please check the path.")
+        return
+
     dataset = load_dataset("json", data_files=DATASET_PATH, split="train")
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
     tokenizer.pad_token = tokenizer.eos_token
-
     # 预处理：应用 Chat Template
     def preprocess_function(examples):
         formatted_prompts = []
@@ -171,7 +174,7 @@ def main():
             prompt_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
             formatted_prompts.append(prompt_text)
         return {"prompt": formatted_prompts}
-
+    
     # 处理所有数据
     dataset = dataset.map(preprocess_function, batched=True)
 
@@ -188,28 +191,38 @@ def main():
     # GRPO 配置 (针对 RTX 6000 Ada 优化)
     training_args = GRPOConfig(
         output_dir=OUTPUT_DIR,
-        learning_rate=5e-6,           # 稍微降低 LR，因为我们有强 Reward 信号
+        learning_rate=5e-6, # 稍微降低 LR，因为我们有强 Reward 信号
         adam_beta1=0.9,
         adam_beta2=0.99,
         weight_decay=0.1,
         warmup_ratio=0.1,
         lr_scheduler_type="cosine",
         logging_steps=10,
-        bf16=True,                    # 必须开启 BF16
-        per_device_train_batch_size=1, # GRPO batch size = 1 (context is heavy)
-        gradient_accumulation_steps=4, 
-        num_generations=8,            # 每次生成 8 个样本进行对比 (Group Size)
-        max_completion_length=1024,   # 给足够的空间思考 (512 可能有点紧)
-        max_prompt_length=2048,
+        bf16=True, # 必须开启 BF16 来充分利用 Ada 的性能
+        
+        # 🛠️ 修改 2: 解决整除报错 & 利用大显存
+        # 你的服务器有 48GB，我们可以把 batch_size 提高到 4
+        # 4 (Batch) 能被 4 (Generations) 整除，完美解决报错
+        per_device_train_batch_size=4, 
+        num_generations=4,            
+        
+        gradient_accumulation_steps=4, # 等效 Batch = 4 * 4 = 16
+        
+        max_completion_length=1024, # 给足够的空间思考 (512 可能有点紧)
+        # 🛠️ 修改 3: 删除 max_prompt_length (防止报错)
+        # max_prompt_length=2048, 
+        
         save_steps=100,
-        max_steps=1000,               # 增加步数，因为数据质量高且增强过
+        max_steps=1000, # 增加步数，因为数据质量高且增强过
+        
+        # 🛠️ 修改 4: 确保 report_to 是字符串 (防止 None 报错)
         report_to="tensorboard",
-        # ⚡ 关键加速: 使用 vLLM
-        # 请确保 pip install vllm
+        
+        # ⚡ 开启 vLLM (服务器专用)
         use_vllm=True, 
-        vllm_gpu_memory_utilization=0.5, # 留 50% 给训练，50% 给 vLLM 生成
+        vllm_gpu_memory_utilization=0.5, 
     )
-
+    
     # 初始化 Trainer
     trainer = GRPOTrainer(
         model=MODEL_NAME,
@@ -225,7 +238,8 @@ def main():
 
     print("🚀 Starting GRPO training on RTX 6000 Ada...")
     print(f"   - vLLM Enabled: {training_args.use_vllm}")
-    print(f"   - Reward Functions: Format, Thinking(Len), Regret(Winrate)")
+    print(f"   - Batch Size: {training_args.per_device_train_batch_size}")
+    print(f"   - Group Size: {training_args.num_generations}")
     
     trainer.train()
     
