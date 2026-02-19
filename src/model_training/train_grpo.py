@@ -1,3 +1,4 @@
+from email.mime import text
 import re
 import json
 import torch
@@ -20,12 +21,23 @@ VALID_COLS = set("ABCDEFGHJ")
 VALID_ROWS = set(str(i) for i in range(1, 10))
 
 # System Prompt 强化：要求它像高手一样思考
+# System Prompt 强化：严禁画图，纯文本思考
 SYSTEM_PROMPT = (
     "You are a professional 9x9 Go player. "
     "Your goal is to find the best move in the current position.\n"
     "1. FIRST, think silently about the board status, liberties, and territory in <think> tags.\n"
     "2. THEN, output your move strictly in 'MOVE: XY' format (e.g., MOVE: C4 or MOVE: pass).\n"
-    "3. FINALLY, provide a short explanation starting with 'EXPLAIN:'."
+    "3. FINALLY, provide a short explanation starting with 'EXPLAIN:'\n"
+    "\n"
+    "IMPORTANT RULES:\n"
+    "- DO NOT DRAW THE BOARD VISUALLY.\n"  
+    "- DO NOT output ASCII art.\n"        
+    "- Focus ONLY on text analysis inside <think> tags.\n"
+    "\n"
+    "Example Output:\n"
+    "<think>Black has a weak group in the corner. I should attack at C3.</think>\n" 
+    "MOVE: C3\n"
+    "EXPLAIN: Attacking the corner group."
 )
 
 # ================= 2. 核心辅助函数 (Utilities) =================
@@ -41,7 +53,7 @@ def is_valid_9x9_coord(coord: str) -> bool:
 def extract_move(text: str) -> Optional[str]:
     """提取 MOVE，增加对 'pass' 的支持，并进行 9x9 校验"""
     # 匹配 MOVE: C4, MOVE: pass, Move: A1 等
-    match = re.search(r"MOVE:\s*([a-zA-Z][0-9]+|pass)", text, re.IGNORECASE)
+    match = re.search(r"MOVE:.*?([A-HJ-T][1-9][0-9]?|pass)", text, re.IGNORECASE)
     if match:
         move = match.group(1).upper()
         if is_valid_9x9_coord(move):
@@ -64,17 +76,14 @@ def format_reward_func(completions, **kwargs) -> List[float]:
     - 缺少特定标签 (-0.5 per missing tag)
     """
     rewards = []
+    print(f"\n[DEBUG PREVIEW] Model Output:\n{completions[0][:500]}\n-------------------")
     for content in completions:
         score = 0.0
-        # 必须有的标签
-        tags = ["<think>", "</think>", "MOVE:", "EXPLAIN:"]
-        missing = [t for t in tags if t not in content]
-        
-        if not missing:
-            score = 0.5
-        else:
-            score -= 0.5 * len(missing) # 缺得越多罚得越重
-            
+        # 只要写了 <think> 就给一点甜头，鼓励它思考
+        if "<think>" in content: score += 0.2
+        if "</think>" in content: score += 0.2
+        # 只要写了 MOVE: 就给甜头
+        if "MOVE:" in content: score += 0.3 
         rewards.append(score)
     return rewards
 
@@ -124,29 +133,29 @@ def outcome_regret_reward_func(prompts, completions, katago_all, **kwargs) -> Li
             
         # 计算当前局面的最佳胜率 (Best Winrate)
         # 注意：如果 k_data 为空（极少见），假设最佳胜率是 0.5 (模糊)
-        all_winrates = [float(v) for v in k_data.values()]
-        best_wr = max(all_winrates) if all_winrates else 0.5
-        
-        # 获取模型选择的步法的胜率
-        if move in k_data:
-            chosen_wr = float(k_data[move])
-            # Regret = 最佳 - 当前
-            regret = best_wr - chosen_wr
-            # Reward: 0 regret -> 1.0 score.  0.2 regret -> 0.8 score.
-            # 这是一个非常平滑的梯度
-            rewards.append(1.0 - regret)
-            
+        all_winrates = [float(v) for v in k_data.values() if v is not None]        
+        best_wr = max(all_winrates) if all_winrates else 0.5        
+
+
+        if move in k_data and k_data[move] is not None:
+            try:
+                chosen_wr = float(k_data[move])
+                # Regret = 最佳 - 当前
+                regret = best_wr - chosen_wr
+                # Reward: 0 regret -> 1.0 score.  0.2 regret -> 0.8 score.
+                rewards.append(1.0 - regret)
+            except:
+                rewards.append(-0.2) # 转换失败作为惩罚
         else:
             # 情况 2: 模型下了一步合法棋，但不在 Top-N 推荐里 (Bad Move)
             # 我们假设这步棋的胜率接近于 0 (或者比最差的推荐还要差)
             # 为了不过度惩罚（避免梯度爆炸），我们给它一个基于最大Regret的分数
-            # 假设这步棋胜率为 0.0
+            # 假设这步棋胜率为 0.0            
             chosen_wr = 0.0
             regret = best_wr - chosen_wr
-            
             # 我们给它一个额外的 -0.2 惩罚，告诉它“你甚至没进候选列表”
             # 但依然比“格式错误(-1.0)”要好，鼓励它输出坐标
-            rewards.append((1.0 - regret) - 0.2) 
+            rewards.append((1.0 - regret) - 0.2)
             
     return rewards
 
@@ -172,6 +181,8 @@ def main():
             ]
             # add_generation_prompt=True 确保 prompt 停在 <|im_start|>assistant
             prompt_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            # 🟢 新增这行：强行帮模型写下 <think> 的开头，逼迫它推理
+            prompt_text += "<think>\n"
             formatted_prompts.append(prompt_text)
         return {"prompt": formatted_prompts}
     
