@@ -1,9 +1,13 @@
+import os  # 新增这一行，防止第 135 行的 os.path.exists 报错崩溃
 from email.mime import text
+import random
+from random import random
 import re
 import json
 import torch
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict
+from datetime import datetime
 
 from datasets import load_dataset
 from transformers import AutoTokenizer
@@ -23,24 +27,26 @@ VALID_ROWS = set(str(i) for i in range(1, 10))
 # System Prompt 强化：要求它像高手一样思考
 # System Prompt 强化：严禁画图，纯文本思考
 SYSTEM_PROMPT = (
-    "You are a professional 9x9 Go player. "
-    "Your goal is to find the best move in the current position.\n"
-    "1. FIRST, think silently about the board status, liberties, and territory in <think> tags.\n"
-    "2. THEN, output your move strictly in 'MOVE: XY' format (e.g., MOVE: C4 or MOVE: pass).\n"
-    "3. FINALLY, provide a short explanation starting with 'EXPLAIN:'\n"
-    "\n"
-    "IMPORTANT RULES:\n"
-    "- DO NOT DRAW THE BOARD VISUALLY.\n"  
-    "- DO NOT output ASCII art.\n"        
-    "- Focus ONLY on text analysis inside <think> tags.\n"
-    "\n"
-    "Example Output:\n"
-    "<think>Black has a weak group in the corner. I should attack at C3.</think>\n" 
-    "MOVE: C3\n"
-    "EXPLAIN: Attacking the corner group."
+    "You are an expert 9x9 Go (Weiqi) Player. You must determine the best tactical next move.\n"
+    "The board is a 9x9 grid. Columns are A through J (skipping I), and rows are 1 through 9.\n"
+    "In the provided board state, '.' represents an empty intersection, 'X' is Black, and 'O' is White.\n\n"
+    "CRITICAL SPATIAL RULES:\n"
+    "1. You MUST NOT place a move on a coordinate that already contains an 'X' or 'O'.\n"
+    "2. You can ONLY play on a coordinate that is currently a '.'.\n\n"
+    "OUTPUT FORMAT:\n"
+    "You must strictly follow this exact structure:\n"
+    "<think>\n"
+    "Step 1: Analyze the global board state, evaluating territory, influence, and any urgent tactical situations.\n"  # 优化：更宏观的局势评估
+    "Step 2: Propose 2 to 3 candidate moves and briefly compare their pros and cons.\n" # 优化：明确要求对比优劣，体现决策过程
+    "Step 3: VERIFY that your final intended move is currently an empty '.' on the board. If it is occupied, pick a different move.\n"
+    "</think>\n"
+    "MOVE: [Coordinate] (e.g., MOVE: C4 or MOVE: PASS)\n"
+    "EXPLAIN: [1-2 short sentences explaining the strategy.]"
 )
 
 # ================= 2. 核心辅助函数 (Utilities) =================
+import re
+from typing import Optional, List, Tuple
 
 def is_valid_9x9_coord(coord: str) -> bool:
     """严格检查是否为 9x9 合法坐标"""
@@ -52,8 +58,7 @@ def is_valid_9x9_coord(coord: str) -> bool:
 
 def extract_move(text: str) -> Optional[str]:
     """提取 MOVE，增加对 'pass' 的支持，并进行 9x9 校验"""
-    # 匹配 MOVE: C4, MOVE: pass, Move: A1 等
-    match = re.search(r"MOVE:.*?([A-HJ-T][1-9][0-9]?|pass)", text, re.IGNORECASE)
+    match = re.search(r"MOVE:\s*([A-HJ-Z][1-9]|PASS)", text, re.IGNORECASE)
     if match:
         move = match.group(1).upper()
         if is_valid_9x9_coord(move):
@@ -65,97 +70,226 @@ def extract_think_content(text: str) -> str:
     match = re.search(r"<think>(.*?)</think>", text, re.DOTALL)
     return match.group(1).strip() if match else ""
 
+def check_spatial_legality(prompt_text: str, move_str: str) -> float:
+    """
+    【新增】二维空间碰撞检测裁判。
+    解析 prompt 中的 ASCII 棋盘，检查落子是否在空位('.')上。
+    返回应扣除的惩罚分数。
+    """
+    if move_str == "PASS":
+        return 0.0 # Pass 在空间上总是合法的
+
+    col_char, row_char = move_str[0], move_str[1]
+    
+    # 1. 提取出纯棋盘部分 (寻找形如 " 9 . . X O . . . . ." 的行)
+    lines = prompt_text.split('\n')
+    board_lines = []
+    for line in lines:
+        if re.match(r"^\s*[1-9]\s+([.XO]\s+)*[.XO]", line):
+            board_lines.append(line)
+
+    if len(board_lines) != 9:
+         return -0.1 # 解析意外，保守扣除一点分
+         
+    # 2. 坐标映射 (A-J 映射到 0-8，9-1 映射到 0-8)
+    row_idx = 9 - int(row_char)
+    col_mapping = {'A': 0, 'B': 1, 'C': 2, 'D': 3, 'E': 4, 'F': 5, 'G': 6, 'H': 7, 'J': 8}
+    col_idx = col_mapping.get(col_char)
+    
+    if col_idx is None:
+        return -0.5
+
+    # 3. 碰撞检测
+    row_elements = board_lines[row_idx].strip().split()
+    if len(row_elements) >= 10: # 索引 0 是行号，后面紧跟 9 个交叉点状态
+        target_spot = row_elements[col_idx + 1]
+        if target_spot != '.':
+            return -0.8 # 核心惩罚：下在已有棋子上！
+
+    return 0.0 # 合法落子（点在 '.' 上），不奖不罚
+
+
 # ================= 3. 奖励函数群 (The Reward Engineering) =================
 
-# --- A. 格式奖励 (基础) ---
-def format_reward_func(completions, **kwargs) -> List[float]:
+# --- A. 格式与二维空间感知奖励 (Layer 1) ---
+def format_and_legality_reward_func(prompts, completions, **kwargs) -> List[float]:
     """
-    检查结构完整性。
-    奖励设计：
-    - 完整结构 (+0.5)
-    - 缺少特定标签 (-0.5 per missing tag)
+    第一层：严格规范输出格式，并教导模型认清 9x9 的二维空间。
+    这是模型拿分的底线门槛。
     """
     rewards = []
-    print(f"\n[DEBUG PREVIEW] Model Output:\n{completions[0][:500]}\n-------------------")
-    for content in completions:
+    for prompt, content in zip(prompts, completions):
         score = 0.0
-        # 只要写了 <think> 就给一点甜头，鼓励它思考
-        if "<think>" in content: score += 0.2
-        if "</think>" in content: score += 0.2
-        # 只要写了 MOVE: 就给甜头
-        if "MOVE:" in content: score += 0.3 
+        
+        # 基础格式奖励
+        if "<think>" in content and "</think>" in content:
+            score += 0.2
+            
+        move_str = extract_move(content)
+        
+        if not move_str:
+             score -= 1.0 # 最高级惩罚：连合法坐标都没输出
+        else:
+            # 二维空间碰撞检测 (如果下在已有棋子上，吃 -0.8 的大亏)
+            collision_penalty = check_spatial_legality(prompt, move_str)
+            score += collision_penalty
+            
         rewards.append(score)
     return rewards
 
-# --- B. 思考过程奖励 (进阶) ---
-def thinking_quality_reward_func(completions, **kwargs) -> List[float]:
+# --- B. 言行一致性与思考质量奖励 (Layer 3 & 4) ---
+def thinking_quality_reward_func(prompts, completions, katago_all, **kwargs) -> List[float]:
     """
-    奖励思考的'量' (Lenient Length Reward)。
-    防止模型偷懒(直接输出答案)或产生无限循环幻觉。
+    第三层与第四层：言行一致性校验 + 条件性字数奖励。
+    防止模型生成“正确的废话”或者“想到A却下B”的精神分裂。
     """
     rewards = []
-    for content in completions:
-        think_text = extract_think_content(content)
-        length = len(think_text)
-        
-        if length == 0:
-            rewards.append(-0.5) # 没思考，扣分
-        elif length < 50:
-            rewards.append(0.0)  # 思考太短，不给分
-        elif 50 <= length <= 500:
-            rewards.append(0.5)  # 黄金思考长度，奖励
-        else:
-            rewards.append(0.0)  # 太长了可能在啰嗦，不给分
+    for prompt, content, k_data in zip(prompts, completions, katago_all):
+        if not isinstance(k_data, dict):
+            k_data = {}
             
+        score = 0.0
+        move_str = extract_move(content)
+        think_text = extract_think_content(content)
+        
+        # 门槛 1：如果动作本身就不合法（包含格式错和撞子），思考再多也是 0 分
+        if not move_str or check_spatial_legality(prompt, move_str) < 0:
+            rewards.append(0.0)
+            continue
+            
+        # 门槛 2：言行一致性检查 (最终下的棋，必须在思考链里推导过)
+        if move_str == "PASS":
+            mentioned_moves = [m.upper() for m in re.findall(r'\bpass\b', think_text, re.IGNORECASE)]
+        else:
+            # 提取 <think> 中所有形如 A1, C4 的坐标
+            mentioned_moves = [m.upper() for m in re.findall(r'\b([A-HJ-Z][1-9])\b', think_text, re.IGNORECASE)]
+        
+        is_consistent = move_str in mentioned_moves
+        
+        if not is_consistent:
+            score -= 0.5 # 逻辑断裂惩罚
+        else:
+            score += 0.2 # 言行一致奖励
+            
+            # 只有在言行一致的前提下，才评估思考的“量” (防止凑字数)
+            length = len(think_text)
+            if length == 0:
+                score -= 0.5
+            elif 50 <= length <= 800:
+                score += 0.1 # 黄金思考长度
+            elif length > 800:
+                score -= 0.1 # 啰嗦惩罚
+                
+            # 加分项：如果不仅思考了，下得还在 KataGo 候选里，说明是真的想明白了
+            if move_str in k_data:
+                score += 0.2
+                
+        rewards.append(score)
     return rewards
 
-# --- C. 胜率后悔值奖励 (核心 - Regret Based) ---
-def outcome_regret_reward_func(prompts, completions, katago_all, **kwargs) -> List[float]:
+# 初始化日志文件路径
+LOG_FILE = "grpo_training_rollouts.jsonl"
+
+def logging_reward_func(prompts, completions, katago_all, katago_best, **kwargs):
     """
-    核心逻辑：Regret Minimization
-    Reward = 1.0 - (Best_Winrate - Chosen_Move_Winrate)
+    专门用于抽样记录日志的“卧底”奖励函数。
+    它不影响模型得分（永远返回 0.0），只负责悄悄把生成的文本和局势写进本地文件。
+    """
+    # 纯粹为了满足 TRL 接口要求， 返回全是 0.0 的列表
+    zero_rewards = [0.0] * len(completions)
+    
+    # 为了避免日志爆炸（每步生成量很大），我们每批数据只随机抽取 1 条进行记录
+    if random.random() < 1.0: # 如果嫌多，可以改成 0.1 (即 10% 的批次才记录)
+        # 随机挑一个幸运儿
+        sample_idx = random.randint(0, len(completions) - 1)
+        
+        prompt_text = prompts[sample_idx]
+        content = completions[sample_idx]
+        k_data = katago_all[sample_idx] if isinstance(katago_all[sample_idx], dict) else {}
+        k_best = katago_best[sample_idx]
+        
+        # 提取模型最终给出的坐标
+        move = extract_move(content)
+        
+        # 复用我们之前写的打分逻辑，计算一下它这把能得多少分（方便日后复盘）
+        layer1_score = 0.2 if "<think>" in content and "</think>" in content else 0.0
+        if not move: 
+            layer1_score -= 1.0
+        else:
+            layer1_score += check_spatial_legality(prompt_text, move)
+            
+        # 组装要写入的日志数据
+        log_entry = {
+            "timestamp": datetime.now().isoformat(),
+            "board_state_prompt": prompt_text, # 记录它当时看到了什么
+            "model_generation": content,       # 记录它的完整思考和回答
+            "extracted_move": move,            # 记录提取出的落子
+            "katago_ground_truth": {
+                "best_winrate": k_best,
+                "candidates": k_data
+            },
+            "reward_breakdown_preview": {
+                "layer1_format_and_space": layer1_score,
+                # 这里为了简洁只演示计算了第一层的分，实际训练中它会获得各个函数的总和
+            }
+        }
+        
+        # 追加写入 JSONL 文件
+        try:
+            with open(LOG_FILE, "a", encoding="utf-8") as f:
+                f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+        except Exception as e:
+            pass # 忽略文件写入错误，防止中断昂贵的训练
+            
+    return zero_rewards
+
+# --- C. 绝对胜率与后悔值奖励 (Layer 2 - Core) ---
+def outcome_regret_reward_func(prompts, completions, katago_all, katago_best, **kwargs) -> List[float]:
+    """
+    第二层：解决劣势局过度奖励的悖论。
+    公式：Reward = Chosen_Winrate - 1.5 * (Best_Winrate - Chosen_Winrate)
     """
     rewards = []
-    for content, k_data_str in zip(completions, katago_all):
-        # 解析 KataGo 数据 (JSON string -> dict)
-        if isinstance(k_data_str, str):
-            try: k_data = json.loads(k_data_str)
-            except: k_data = {}
-        else:
-            k_data = k_data_str if k_data_str else {}
+
+    for content, k_data, best_wr in zip(completions, katago_all, katago_best):
+        if not isinstance(k_data, dict):
+            k_data = {}
 
         move = extract_move(content)
         
-        # 情况 1: 格式错误或非法坐标
-        if move is None:
-            rewards.append(-1.0)
+        # 门槛：非法动作不在此处重复惩罚，直接给 0
+        if not move:
+            rewards.append(0.0)
             continue
             
-        # 计算当前局面的最佳胜率 (Best Winrate)
-        # 注意：如果 k_data 为空（极少见），假设最佳胜率是 0.5 (模糊)
-        all_winrates = [float(v) for v in k_data.values() if v is not None]        
-        best_wr = max(all_winrates) if all_winrates else 0.5        
+        best_wr_val = float(best_wr) if best_wr is not None else 0.5
 
-
+        # 情况 1: 模型落子在 KataGo 的高质量候选点中
         if move in k_data and k_data[move] is not None:
             try:
                 chosen_wr = float(k_data[move])
-                # Regret = 最佳 - 当前
-                regret = best_wr - chosen_wr
-                # Reward: 0 regret -> 1.0 score.  0.2 regret -> 0.8 score.
-                rewards.append(1.0 - regret)
+                regret = best_wr_val - chosen_wr
+                
+                # 绝对胜率做基底，错失最优解做惩罚 (系数设为 1.5)
+                reward_score = chosen_wr - (1.5 * regret)
+                rewards.append(max(-1.0, min(1.0, reward_score)))
             except:
-                rewards.append(-0.2) # 转换失败作为惩罚
+                rewards.append(-0.2)
+                
+        # 情况 2: 模型下了一步合法棋，但不在 Top 候选推荐里
         else:
-            # 情况 2: 模型下了一步合法棋，但不在 Top-N 推荐里 (Bad Move)
-            # 我们假设这步棋的胜率接近于 0 (或者比最差的推荐还要差)
-            # 为了不过度惩罚（避免梯度爆炸），我们给它一个基于最大Regret的分数
-            # 假设这步棋胜率为 0.0            
-            chosen_wr = 0.0
-            regret = best_wr - chosen_wr
-            # 我们给它一个额外的 -0.2 惩罚，告诉它“你甚至没进候选列表”
-            # 但依然比“格式错误(-1.0)”要好，鼓励它输出坐标
-            rewards.append((1.0 - regret) - 0.2)
+            if k_data:
+                # 寻找候选池中最差的胜率作为 baseline
+                worst_candidate_wr = min(float(v) for v in k_data.values() if v is not None)
+                # 因为它比候选池里最差的还差，胜率基底再扣 0.1
+                fallback_wr = max(0.0, worst_candidate_wr - 0.1)
+            else:
+                fallback_wr = 0.0
+                
+            regret = best_wr_val - fallback_wr
+            # 盲点额外固定惩罚 -0.2
+            reward_score = fallback_wr - (1.5 * regret) - 0.2
+            rewards.append(max(-1.0, min(1.0, reward_score)))
             
     return rewards
 
@@ -182,7 +316,7 @@ def main():
             # add_generation_prompt=True 确保 prompt 停在 <|im_start|>assistant
             prompt_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
             # 🟢 新增这行：强行帮模型写下 <think> 的开头，逼迫它推理
-            prompt_text += "<think>\n"
+            # prompt_text += "<think>\n"
             formatted_prompts.append(prompt_text)
         return {"prompt": formatted_prompts}
     
@@ -214,10 +348,10 @@ def main():
         # 🛠️ 修改 2: 解决整除报错 & 利用大显存
         # 你的服务器有 48GB，我们可以把 batch_size 提高到 4
         # 4 (Batch) 能被 4 (Generations) 整除，完美解决报错
-        per_device_train_batch_size=4, 
-        num_generations=4,            
+        per_device_train_batch_size=8, 
+        num_generations=8,            
         
-        gradient_accumulation_steps=4, # 等效 Batch = 4 * 4 = 16
+        gradient_accumulation_steps=2, # 等效 Batch = 2 * 8 = 16
         
         max_completion_length=1024, # 给足够的空间思考 (512 可能有点紧)
         # 🛠️ 修改 3: 删除 max_prompt_length (防止报错)
@@ -227,8 +361,9 @@ def main():
         max_steps=1000, # 增加步数，因为数据质量高且增强过
         
         # 🛠️ 修改 4: 确保 report_to 是字符串 (防止 None 报错)
-        report_to="tensorboard",
-        
+        #report_to="tensorboard",
+        report_to="wandb",
+
         # ⚡ 开启 vLLM (服务器专用)
         use_vllm=True, 
         vllm_gpu_memory_utilization=0.5, 
@@ -238,9 +373,10 @@ def main():
     trainer = GRPOTrainer(
         model=MODEL_NAME,
         reward_funcs=[
-            format_reward_func,          # 权重 1: 格式
+            format_and_legality_reward_func, # 权重 1: 格式
             thinking_quality_reward_func,# 权重 1: 思考质量
             outcome_regret_reward_func,  # 权重 1: 核心胜率 Regret
+            logging_reward_func, # 🟢 新增：卧底日志记录员
         ],
         args=training_args,
         train_dataset=dataset,
