@@ -1,0 +1,27 @@
+# 基础镜像：无需太新，保证稳定即可
+FROM pytorch/pytorch:2.1.2-cuda12.1-cudnn8-devel
+
+WORKDIR /workspace
+ENV DEBIAN_FRONTEND=noninteractive
+
+# 系统依赖
+RUN apt-get update && \
+    apt-get install -y git curl vim htop wget ninja-build && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN pip install --upgrade pip
+
+# 核心 AI 依赖：移除 vLLM（本地跑不动），加入 bitsandbytes（4-bit 量化救星）
+RUN pip install --no-cache-dir \
+    transformers \
+    datasets \
+    accelerate \
+    peft \
+    trl \
+    pandas \
+    wandb \
+    scipy \
+    bitsandbytes
+
+# 注意：为了你能快速在本地起容器，去掉了耗时巨大且在量化推理下收益不明显的 flash-attn 编译。
+CMD ["/bin/bash"]
