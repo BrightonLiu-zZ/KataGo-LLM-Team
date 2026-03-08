@@ -1,7 +1,6 @@
 import os  # 新增这一行，防止第 135 行的 os.path.exists 报错崩溃
 from email.mime import text
 import random
-from random import random
 import re
 import json
 import torch
@@ -365,8 +364,9 @@ def main():
         report_to="wandb",
 
         # ⚡ 开启 vLLM (服务器专用)
-        use_vllm=True, 
-        vllm_gpu_memory_utilization=0.5, 
+        # use_vllm=True, 
+        use_vllm=False,
+        #llm_gpu_memory_utilization=0.5, 
     )
     
     # 初始化 Trainer
