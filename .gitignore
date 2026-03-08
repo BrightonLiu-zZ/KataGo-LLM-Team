@@ -8,6 +8,7 @@ src/data_acquiring/old_scripts/
 
 runs/
 
-# MyModel/
+# Ignore model weights and training states
+MyModel/
 
 src/interception/python/
