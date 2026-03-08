@@ -6,4 +6,8 @@ KataGo_engine/*
 # Prevent pushing all files from src/data_acquiring/old_scripts
 src/data_acquiring/old_scripts/
 
-# runs/qwen2.5-0.5B-grpo-laptop-test/
+runs/
+
+# MyModel/
+
+src/interception/python/
