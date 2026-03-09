@@ -283,32 +283,40 @@ def process_one_record(record):
             
             full_prompt = "\n".join(new_prompt_parts)
             
-            # C. 变换 Katago 数据
-            new_katago = {}
-            if katago_all:
-                for k, v in katago_all.items():
-                    # 坐标变换
-                    # 修复点：这里 parse_coord 现在返回 (None, None)，解包安全了
-                    kx, ky = parse_coord(k)
+            # C. 变换新的全盘字典数据 (katago_evals)
+            new_evals = {}
+            if "katago_evals" in record:
+                for coord, metrics in record["katago_evals"].items():
+                    kx, ky = parse_coord(coord)
                     
                     if kx is not None:
+                        # 转换坐标位置
                         nkx, nky = transform_xy(kx, ky, op)
-                        new_k = to_coord_str(nkx, nky)
+                        new_coord = to_coord_str(nkx, nky)
                         
-                        # 胜率变换
-                        new_v = v
+                        # 拷贝内部字典，防止被篡改
+                        new_metrics = copy.deepcopy(metrics)
+                        
+                        # 如果开启了黑白翻转且胜率有效，翻转胜负指标
                         if color_flip and INVERT_WINRATE_ON_COLOR_FLIP:
-                            new_v = 1.0 - v
-                        
-                        new_katago[new_k] = new_v
+                            if new_metrics.get("winrate") is not None:
+                                new_metrics["winrate"] = 1.0 - new_metrics["winrate"]
+                            if new_metrics.get("scoreLead") is not None:
+                                new_metrics["scoreLead"] = -new_metrics["scoreLead"] # 目差赢变输
+                                
+                        new_evals[new_coord] = new_metrics
                     else:
-                        # 对于 pass 或其他无法解析的坐标，保留原样
-                        new_katago[k] = v 
-                
+                        # 对于 PASS，直接原样保留
+                        new_evals[coord] = copy.deepcopy(metrics)
+            
             # D. 打包结果
             new_rec = copy.deepcopy(record)
             new_rec['user_prompt'] = full_prompt
-            new_rec['katago_all'] = new_katago
+            new_rec['katago_evals'] = new_evals # 使用新的大字典
+            
+            # 宏观的 root 评估值不需要旋转，直接拷贝即可
+            new_rec['root_winrate'] = record.get('root_winrate')
+            new_rec['root_scoreLead'] = record.get('root_scoreLead')
             
             # 生成唯一 ID
             orig_id = record.get('original_id', 'unknown')

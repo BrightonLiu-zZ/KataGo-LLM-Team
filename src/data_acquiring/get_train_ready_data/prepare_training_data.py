@@ -157,31 +157,31 @@ def process_line(line_str):
         f"Analyze the board structure (territory, shapes, liberties). \n"
         f"Then, identify the best move coordinate (e.g. D4) and explain your reasoning."
     )
+    # === 5. 提取新的全盘数据并生成合法坐标列表 ===
+    katago_evals = raw.get("katago_evals", {})
+    root_winrate = raw.get("root_winrate")
+    root_scoreLead = raw.get("root_scoreLead")
 
-    # 5. 提取 KataGo 数据
-    katago_data = {}
-    best_wr = -1.0
-    analysis_list = raw.get("katago_analysis", [])
+    # 找出棋盘上所有的空点 (Valid Empty Coordinates)
+    valid_empty_coords = []
+    cols = "ABCDEFGHJ"
+    for r in range(9):
+        for c in range(9):
+            if b.get(r, c) is None: # 如果这个点是空的
+                valid_empty_coords.append(f"{cols[c]}{r+1}")
     
-    if not analysis_list:
-        return None
+    # 把它加到我们给 LLM 的提示词末尾
+    prompt_text += f"\n\nValid empty coordinates are: [{', '.join(valid_empty_coords)}]"
 
-    for info in analysis_list:
-        mv = info.get("move")      # e.g. "D6" or "pass"
-        wr = info.get("winrate")
-        if mv and wr is not None:
-            katago_data[mv] = float(wr)
-            if float(wr) > best_wr:
-                best_wr = float(wr)
-
-    if not katago_data:
+    if not katago_evals:
         return None
 
     return {
         "original_id": raw.get("id"),
         "user_prompt": prompt_text,
-        "katago_all": katago_data,
-        "katago_best": best_wr
+        "katago_evals": katago_evals,      # 传递完整的大字典
+        "root_winrate": root_winrate,      # 传递当前盘面胜率
+        "root_scoreLead": root_scoreLead   # 传递当前盘面目差
     }
 
 def main():

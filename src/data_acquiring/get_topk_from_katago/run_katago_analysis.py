@@ -1,130 +1,119 @@
-import subprocess
+import asyncio
 import json
-import os
-import sys
 import time
+import sys
 
 # ================= 配置区 =================
-# 1. 试运行限制：设为 10000 用于快速测试。
-MAX_LIMIT = 10000
+# 1. 试运行限制：设为 100 用于快速测试跑分
+MAX_LIMIT = 100
 
-# 2. 核心路径 (请确认你的 9x9 模型文件名是否正确)
-KATAGO_EXE = r"C:\git_repo\KataGo-LLM-Team\KataGo_engine\katago.exe"
-CONFIG_FILE = r"C:\git_repo\KataGo-LLM-Team\script\get_topk_from_katago\analysis.cfg"
-MODEL_FILE = r"C:\git_repo\KataGo-LLM-Team\KataGo_engine\KataGo18b9x9.gz"
+# 2. 核心路径 (已修改为相对路径，适配 Linux 服务器)
+# 注意：确保 Linux 服务器上的 KataGo 可执行文件有运行权限 (chmod +x)
+KATAGO_EXE = "./KataGo_engine/katago"  # 去掉了 .exe
+CONFIG_FILE = "src/data_acquiring/get_topk_from_katago/analysis.cfg"
+MODEL_FILE = "KataGo_engine/KataGo18b9x9.gz"
 
 # 3. 输入输出
-INPUT_FILE = r"C:\git_repo\KataGo-LLM-Team\data\json_output.jsonl"
-OUTPUT_FILE = r"C:\git_repo\KataGo-LLM-Team\data\json_output_with_topk.jsonl"
-
-# 4. Top-K 设置: 我们在脚本里截取前几手
-TOP_K = 10
+INPUT_FILE = "data/json_output.jsonl"
+OUTPUT_FILE = "data/json_output_with_topk_TEST.jsonl" # 加上 TEST 后缀防误覆盖原数据
 # ===========================================
 
-def run_analysis():
-    cmd = [
-        KATAGO_EXE, "analysis",
-        "-config", CONFIG_FILE,
-        "-model", MODEL_FILE
-    ]
-    
-    print(f"=== KataGo 数据生成脚本 (Top-{TOP_K} 修正版) ===")
-    print(f"目标数量: {MAX_LIMIT if MAX_LIMIT else '全部'}")
+def map_policy_to_coords(policy_array):
+    """将 KataGo 的 1D Policy 数组映射为 2D 坐标字典"""
+    coords_dict = {}
+    cols = "ABCDEFGHJ"
+    for i in range(81):
+        x = i % 9
+        y = 8 - (i // 9)
+        coords_dict[f"{cols[x]}{y+1}"] = policy_array[i]
+    coords_dict["PASS"] = policy_array[81]
+    return coords_dict
+
+async def run_analysis():
+    print(f"=== KataGo 异步全盘跑分测试 (选项 B) ===")
+    print(f"目标数量: {MAX_LIMIT} 局 | Temp: 2.5 | Visits: 5000")
     
     try:
-        process = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=sys.stderr,
-            text=True,
-            encoding='utf-8',
-            bufsize=1 
+        process = await asyncio.create_subprocess_exec(
+            KATAGO_EXE, "analysis", "-config", CONFIG_FILE, "-model", MODEL_FILE,
+            stdin=asyncio.subprocess.PIPE, 
+            stdout=asyncio.subprocess.PIPE, 
+            stderr=asyncio.subprocess.PIPE
         )
     except FileNotFoundError:
-        print(f"错误: 找不到 {KATAGO_EXE}")
+        print(f"错误: 找不到 {KATAGO_EXE}，请检查路径或执行权限。")
         return
 
-    print("引擎已启动，开始清洗并处理数据...")
+    print("引擎已启动，开始火力全开...")
     start_time = time.time()
+    count = 0
     
     with open(INPUT_FILE, 'r', encoding='utf-8') as fin, \
          open(OUTPUT_FILE, 'w', encoding='utf-8') as fout:
         
-        count = 0
         for line in fin:
             if not line.strip(): continue
+            if count >= MAX_LIMIT: break
+                
+            original_data = json.loads(line)
             
-            # 刹车机制
-            if MAX_LIMIT and count >= MAX_LIMIT:
-                print(f"\n[提示] 已达到设定限制 {MAX_LIMIT} 行，停止运行。")
-                break
+            # === 构造选项 B 的魔法请求 ===
+            query = {
+                "id": original_data.get("id"),
+                "rules": original_data.get("rules", "chinese"),
+                "komi": original_data.get("komi", 6.5),
+                "boardXSize": 9, "boardYSize": 9,
+                "initialStones": original_data.get("initialStones", []),
+                "moves": original_data.get("moves", []),
+                "analyzeTurns": original_data.get("analyzeTurns", [len(original_data.get("moves", []))]),
+                
+                # 👇 选项 B 的核心参数
+                "reportPolicy": True,
+                "rootPolicyTemperature": 2.5,
+                "maxVisits": 5000
+            }
+            
+            process.stdin.write((json.dumps(query) + "\n").encode('utf-8'))
+            await process.stdin.drain()
+            
+            response_line = await process.stdout.readline()
+            if not response_line: break
+            response = json.loads(response_line.decode('utf-8'))
+            
+            # === 解析全盘数据 ===
+            katago_evals = {}
+            if "policy" in response:
+                policy_dict = map_policy_to_coords(response["policy"])
+                for coord, pol in policy_dict.items():
+                    katago_evals[coord] = {"policy": pol, "winrate": None, "scoreLead": None}
+            
+            if "moveInfos" in response:
+                original_data["root_winrate"] = response["rootInfo"]["winrate"]
+                original_data["root_scoreLead"] = response["rootInfo"]["scoreLead"]
+                for info in response["moveInfos"]:
+                    mv = info.get("move")
+                    if mv in katago_evals:
+                        katago_evals[mv]["winrate"] = info.get("winrate")
+                        katago_evals[mv]["scoreLead"] = info.get("scoreLead")
 
-            try:
-                original_data = json.loads(line)
-                
-                # === [关键修复] 数据清洗 ===
-                # 不要直接发送 original_data，而是构造一个干净的 query
-                # KataGo 只接受以下标准字段
-                query = {
-                    "id": original_data.get("id"),
-                    "rules": original_data.get("rules", "chinese"),
-                    "komi": original_data.get("komi", 6.5),
-                    "boardXSize": original_data.get("boardXSize", 9),
-                    "boardYSize": original_data.get("boardYSize", 9),
-                    "initialStones": original_data.get("initialStones", []),
-                    "moves": original_data.get("moves", []),
-                    # 确保只分析当前这一手
-                    "analyzeTurns": original_data.get("analyzeTurns", [len(original_data.get("moves", []))])
-                }
-                
-                # 发送干净的 Query
-                process.stdin.write(json.dumps(query) + "\n")
-                process.stdin.flush()
-                
-                # 获取结果
-                response_line = process.stdout.readline()
-                if not response_line:
-                    print("\n引擎异常退出。")
-                    break
-                    
-                response = json.loads(response_line)
-                
-                if "error" in response:
-                    print(f"\n警告: ID {query['id']} 出错: {response['error']}")
-                elif "warning" in response:
-                    # 如果还有警告，打印出来看看
-                    print(f"\n警告: ID {query['id']} : {response['warning']}")
-
-                # === [关键步骤] 提取 Top-K ===
-                # KataGo 返回的 moveInfos 包含了所有候选点的信息
-                if "moveInfos" in response:
-                    # 截取前 10 手
-                    top_moves = response["moveInfos"][:TOP_K]
-                    
-                    # 将提取好的 Top-K 数据塞回原始数据中
-                    # 这样 LLM 就能直接读到 "candidate_moves" 列表
-                    original_data["katago_analysis"] = top_moves
-                else:
-                    original_data["katago_analysis"] = response # 如果出错，保留原始错误信息
-
-                # 写入文件
-                fout.write(json.dumps(original_data, ensure_ascii=False) + "\n")
-                
-                count += 1
-                if count % 10 == 0:
-                    elapsed = time.time() - start_time
-                    speed = count / elapsed if elapsed > 0 else 0
-                    print(f"进度: {count} | 速度: {speed:.1f} 图/秒", end='\r')
-                    
-            except Exception as e:
-                print(f"\n处理出错: {e}")
-                break
+            original_data["katago_evals"] = katago_evals
+            
+            # 清理旧字段（如果存在）
+            original_data.pop("katago_analysis", None)
+            
+            fout.write(json.dumps(original_data, ensure_ascii=False) + "\n")
+            
+            count += 1
+            if count % 10 == 0:
+                elapsed = time.time() - start_time
+                speed = count / elapsed if elapsed > 0 else 0
+                print(f"进度: {count}/{MAX_LIMIT} | 速度: {speed:.1f} 图/秒", end='\r')
 
     process.stdin.close()
-    process.terminate()
-    print(f"\n\n=== 完成 ===")
+    print(f"\n\n=== 测试完成 ===")
+    total_time = time.time() - start_time
+    print(f"总耗时: {total_time:.2f} 秒 | 平均速度: {count / total_time:.2f} 图/秒")
     print(f"输出文件: {OUTPUT_FILE}")
 
 if __name__ == "__main__":
-    run_analysis()
+    asyncio.run(run_analysis())
