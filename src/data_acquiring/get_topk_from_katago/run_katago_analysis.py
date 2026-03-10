@@ -2,6 +2,7 @@ import asyncio
 import json
 import time
 import sys
+import os # <--- 新增 os
 
 # ================= 配置区 =================
 # 1. 试运行限制：设为 100 用于快速测试跑分
@@ -17,6 +18,31 @@ MODEL_FILE = "KataGo_engine/KataGo18b9x9.gz"
 INPUT_FILE = "data/json_output.jsonl"
 OUTPUT_FILE = "data/json_output_with_topk_TEST.jsonl" # 加上 TEST 后缀防误覆盖原数据
 # ===========================================
+
+# ================= 🚨 路径排查小助手 🚨 =================
+print("=== 正在执行路径体检 ===")
+paths_to_check = {
+    "KataGo 引擎 (KATAGO_EXE)": KATAGO_EXE,
+    "配置文件 (CONFIG_FILE)": CONFIG_FILE,
+    "权重模型 (MODEL_FILE)": MODEL_FILE,
+    "输入数据 (INPUT_FILE)": INPUT_FILE
+}
+
+all_passed = True
+for name, path in paths_to_check.items():
+    abs_path = os.path.abspath(path) # 获取服务器上的绝对路径
+    exists = os.path.exists(abs_path)
+    if exists:
+        print(f"✅ {name}: 存在 ({abs_path})")
+    else:
+        print(f"❌ {name}: 找不到! Python 正在寻找的绝对路径是 -> {abs_path}")
+        all_passed = False
+
+if not all_passed:
+    print("\n🚨 体检未通过！请根据上面的 ❌ 检查服务器上对应的文件是否存在。")
+    sys.exit(1) # 直接退出，不往下跑了
+print("=== 体检通过，准备启动 KataGo ===\n")
+# ========================================================
 
 def map_policy_to_coords(policy_array):
     """将 KataGo 的 1D Policy 数组映射为 2D 坐标字典"""
