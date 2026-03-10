@@ -10,6 +10,8 @@
 
 ## 📖 About The Project
 
+<video src="lmstudio_lizzie_demonstration.mp4" controls="controls" style="max-width: 100%; height: auto;"></video>
+
 This project bridges two major challenges in modern AI: **algorithmic alignment for spatial reasoning** and **model compression for edge device deployment**.
 
 Large language models are not naturally equipped for spatial board games like Go — they lack built-in 2D coordinate reasoning, board legality awareness, and any understanding of territory or life-and-death. We bridge that gap by using [KataGo](https://github.com/lightvector/KataGo) as an expert teacher (for training data generation only) and training [Qwen2.5-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct) with Group Relative Policy Optimization (GRPO). The key insight is an *outcome-regret reward formulation* that forces the model to learn not just "play somewhere reasonable" but "play the best available move."
@@ -151,7 +153,7 @@ We use **Group Relative Policy Optimization (GRPO)** to train `Qwen2.5-7B-Instru
 
 | Layer | Function | Range |
 |-------|----------|-------|
-| **Format & Legality** | Checks `<think>…</think>` tags; penalises illegal or occupied moves via ASCII board parsing | `[−1.0, +0.2]` |
+| **Format & Legality** | Checks `<|im_start|>…ground` tags; penalises illegal or occupied moves via ASCII board parsing | `[−1.0, +0.2]` |
 | **Thinking Coherence** | Penalises chain-of-thought inconsistency (thinking `D6`, playing `C4`); rewards correct length and top-10 move inclusion | `[−0.5, +0.5]` |
 | **Outcome Regret** | Core signal: $\text{reward} = \text{wr}_{\text{chosen}} - 1.5 \times (\text{wr}_{\text{best}} - \text{wr}_{\text{chosen}})$ — heavily penalises suboptimal moves even in winning positions | `[−1.0, +1.0]` |
 | **Logging** | Non-scoring; samples rollouts to `grpo_training_rollouts.jsonl` for offline analysis | — |
