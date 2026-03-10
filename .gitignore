@@ -15,3 +15,7 @@ src/interception/python/
 MyModel/*
 
 lmstudio_lizzie_demonstration.mp4
+
+.claude/*
+
+katago-gtp-proxy-windows-v1.0.zip
