@@ -10,7 +10,7 @@
 
 ## 📖 About The Project
 
-<video controls src="lmstudio_lizzie_demonstration.mp4" title="Title"></video>
+https://github.com/user-attachments/assets/27d0e772-06e4-4ebd-beec-a5b2c67dda6d
 
 This project bridges two major challenges in modern AI: **algorithmic alignment for spatial reasoning** and **model compression for edge device deployment**.
 
