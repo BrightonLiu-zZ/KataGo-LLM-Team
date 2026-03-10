@@ -1,6 +1,5 @@
 # 1. 升级基础镜像：适配最新 vLLM 需求的 PyTorch 2.4.0
-FROM pytorch/pytorch:2.4.0-cuda12.1-cudnn9-devel
-
+FROM pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel
 # 2. 设置工作目录
 WORKDIR /workspace
 
