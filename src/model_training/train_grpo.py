@@ -17,7 +17,7 @@ from trl import GRPOTrainer, GRPOConfig
 # 路径配置
 DATASET_PATH = "data/training_data_augmented_shuffled.jsonl" 
 MODEL_NAME = "Qwen/Qwen2.5-7B-Instruct"
-OUTPUT_DIR = "runs/Qwen2.5-7B-GRPO-Go-Pro-v1"
+OUTPUT_DIR = "runs/Qwen2.5-7B-GRPO-Go-Pro-v3" # 请根据需要修改输出目录
 
 # 9x9 围棋坐标系 (不包含 'I')
 VALID_COLS = set("ABCDEFGHJ") 
@@ -187,7 +187,7 @@ def thinking_quality_reward_func(prompts, completions, katago_all, **kwargs) -> 
     return rewards
 
 # 初始化日志文件路径
-LOG_FILE = "grpo_training_rollouts.jsonl"
+LOG_FILE = "src/model_training/logs/grpo_training_rollouts.jsonl_v3"
 
 def logging_reward_func(prompts, completions, katago_all, katago_best, **kwargs):
     """
@@ -364,9 +364,9 @@ def main():
         report_to="wandb",
 
         # ⚡ 开启 vLLM (服务器专用)
-        # use_vllm=True, 
-        use_vllm=False,
-        #llm_gpu_memory_utilization=0.5, 
+        use_vllm=True, 
+        # use_vllm=False,
+        llm_gpu_memory_utilization=0.5, 
     )
     
     # 初始化 Trainer

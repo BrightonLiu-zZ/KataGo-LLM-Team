@@ -1,5 +1,6 @@
 # 1. 升级基础镜像：适配最新 vLLM 需求的 PyTorch 2.4.0
 FROM pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel
+
 # 2. 设置工作目录
 WORKDIR /workspace
 
@@ -18,7 +19,7 @@ RUN pip install --upgrade pip
 # 6. 设置目标显卡架构 (针对 RTX 6000 Ada 优化编译过程)
 ENV TORCH_CUDA_ARCH_LIST="8.9"
 
-# 7. 安装核心 AI 依赖
+# 7. 先安装基础核心 AI 依赖
 RUN pip install --no-cache-dir \
     transformers \
     datasets \
@@ -27,11 +28,13 @@ RUN pip install --no-cache-dir \
     trl \
     pandas \
     wandb \
-    scipy \
-    vllm 
+    scipy 
+
+# 7.5 单独安装极易报错的 vLLM
+RUN pip install --no-cache-dir vllm
 
 # 8. 安装 Flash Attention 2
-RUN pip install flash-attn --no-build-isolation
+RUN MAX_JOBS=2 pip install flash-attn --no-build-isolation
 
 # 9. 默认启动命令
 CMD ["/bin/bash"]

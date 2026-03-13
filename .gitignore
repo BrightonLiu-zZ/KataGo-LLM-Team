@@ -1,7 +1,7 @@
 # Ignore all files in the data/ folder
-data/*
+data/
 
-KataGo_engine/*
+KataGo_engine/
 
 # Prevent pushing all files from src/data_acquiring/old_scripts
 src/data_acquiring/old_scripts/
@@ -9,19 +9,34 @@ src/data_acquiring/old_scripts/
 runs/
 
 # Ignore model weights and training states
+MyModel/
 
 src/interception/python/
 
-MyModel/*
+model_quantization/
 
-lmstudio_lizzie_demonstration.mp4
+v1.16.4.zip
 
-.claude/*
+squashfs-root/
 
-katago-gtp-proxy-windows-v1.0.zip
+llama_env/
 
-test_model.py
+llama.cpp/
 
-ersuser1miniconda3Scriptsactivate) ; (conda activate base)
+KataGo-1.16.4/
 
-grpo_training_rollouts.jsonl
+src/model_training/logs/
+
+CLAUDE.md
+
+.hf_cache/
+
+.claude/
+
+merged-qwen-7b-go/
+
+.vscode/
+
+wandb/
+
+src/interception/gtp_proxy.exe
