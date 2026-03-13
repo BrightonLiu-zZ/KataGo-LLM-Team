@@ -1,7 +1,7 @@
 # Ignore all files in the data/ folder
-data/*
+data/
 
-KataGo_engine/*
+KataGo_engine/
 
 # Prevent pushing all files from src/data_acquiring/old_scripts
 src/data_acquiring/old_scripts/
@@ -12,3 +12,31 @@ runs/
 MyModel/
 
 src/interception/python/
+
+model_quantization/
+
+v1.16.4.zip
+
+squashfs-root/
+
+llama_env/
+
+llama.cpp/
+
+KataGo-1.16.4/
+
+src/model_training/logs/
+
+CLAUDE.md
+
+.hf_cache/
+
+.claude/
+
+merged-qwen-7b-go/
+
+.vscode/
+
+wandb/
+
+src/interception/gtp_proxy.exe
