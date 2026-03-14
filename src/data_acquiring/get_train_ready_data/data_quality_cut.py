@@ -1,8 +1,8 @@
 import json
 import os
 
-INPUT_FILE = r'C:\git_repo\KataGo-LLM-Team\data\training_ready_data.jsonl'
-OUTPUT_FILE = r'C:\git_repo\KataGo-LLM-Team\data\training_data_quality_filtered.jsonl'
+INPUT_FILE = 'data/training_ready_data_v3.jsonl'
+OUTPUT_FILE = 'data/training_data_quality_filtered_v3.jsonl'
 
 def curate_dataset():
     print("开始极简清洗：保留所有手数 >= 4 的对局...")

@@ -4,10 +4,10 @@ import os
 
 # ================= 配置区 =================
 # 输入：上一以增强后的文件
-INPUT_FILE = r'C:\git_repo\KataGo-LLM-Team\data\training_data_augmented.jsonl'
+INPUT_FILE = 'data/training_data_augmented_v3.jsonl'
 
 # 输出：最终喂给模型的训练数据
-OUTPUT_FILE = r'C:\git_repo\KataGo-LLM-Team\data\training_data_augmented_shuffled.jsonl'
+OUTPUT_FILE = 'data/training_data_augmented_shuffled_v3.jsonl'
 
 # 设置随机种子，保证每次打乱的结果一致（方便复现）
 RANDOM_SEED = 42

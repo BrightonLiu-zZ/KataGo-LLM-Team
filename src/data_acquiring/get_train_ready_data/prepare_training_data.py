@@ -8,11 +8,8 @@ except ImportError:
     sys.exit(1)
 
 # ================= 配置路径 =================
-# 建议先跑 short 版本测试，没问题了再改成完整版
-#INPUT_FILE = r"C:\git_repo\KataGo-LLM-Team\data\json_output_with_topk_short.jsonl"
-INPUT_FILE = r"C:\git_repo\KataGo-LLM-Team\data\json_output_with_topk.jsonl" 
-
-OUTPUT_FILE = r"C:\git_repo\KataGo-LLM-Team\data\training_ready_data.jsonl"
+INPUT_FILE = "data/json_output_with_topk_official.jsonl"
+OUTPUT_FILE = "data/training_ready_data_v3.jsonl"
 BOARD_SIZE = 9
 # ===========================================
 

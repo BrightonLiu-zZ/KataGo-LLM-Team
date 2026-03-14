@@ -40,3 +40,5 @@ merged-qwen-7b-go/
 wandb/
 
 src/interception/gtp_proxy.exe
+
+nvidia-smi.md

@@ -4,8 +4,8 @@ import os
 
 # ================= 配置区 =================
 # 请修改为你的实际路径
-INPUT_FILE = r'C:\git_repo\KataGo-LLM-Team\data\training_data_quality_filtered.jsonl'
-OUTPUT_FILE = r'C:\git_repo\KataGo-LLM-Team\data\training_data_augmented.jsonl'
+INPUT_FILE = 'data/training_data_quality_filtered_v3.jsonl'
+OUTPUT_FILE = 'data/training_data_augmented_v3.jsonl'
 
 # ⚠️ 关键设置：仅当 katago_all 代表 "绝对黑棋胜率" 时设为 True。
 # 你确认是 Winrate of Player to Move，所以设为 False。
