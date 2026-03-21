@@ -375,10 +375,9 @@ def main():
         gradient_accumulation_steps=2,
         max_completion_length=512,
         save_steps=500,              # checkpoint every ~500 steps; terminate manually when ready
-        max_steps=100000,            # safety ceiling (~weeks of training); stop manually via Ctrl+C
+        max_steps=270000,            # safety ceiling (~weeks of training); stop manually via Ctrl+C
         report_to="wandb",
-        use_vllm=True,
-        vllm_gpu_memory_utilization=0.4,
+        use_vllm=False,
     )
 
     trainer = GRPOTrainer(
