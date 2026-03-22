@@ -173,16 +173,20 @@ def _compute_r_winrate(move: str, evals: dict) -> float:
 
 def format_and_legality_reward_func(prompts, completions, **kwargs) -> List[float]:
     """
-    Gate layer.  Returns:
+    Gate layer with partial credit to bootstrap format learning.
+    Returns:
       0.0   valid move on an empty square
-      -1.0  anything else (no move extracted, occupied square, invalid coord)
-    No partial credit — pure gate.
+     -0.5   MOVE: extracted but coord is invalid or on an occupied stone
+     -1.0   no MOVE: found at all (truncated / wrong format)
+    Total range [-1, 0] — keeps overall reward within [-1, +1].
     """
     rewards = []
     for prompt, content in zip(prompts, completions):
         move_str = extract_move(content)
-        if not move_str or check_spatial_legality(prompt, move_str) < 0:
+        if not move_str:
             rewards.append(-1.0)
+        elif check_spatial_legality(prompt, move_str) < 0:
+            rewards.append(-0.5)
         else:
             rewards.append(0.0)
     return rewards
@@ -343,7 +347,8 @@ def main():
                 {"role": "user",   "content": user_p}
             ]
             prompt_text = tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
+                messages, tokenize=False, add_generation_prompt=True,
+                enable_thinking=False
             )
             formatted_prompts.append(prompt_text)
         return {"prompt": formatted_prompts}
@@ -370,10 +375,11 @@ def main():
         lr_scheduler_type="constant_with_warmup",  # flat LR after warmup; safe for open-ended runs
         logging_steps=10,
         bf16=True,
-        per_device_train_batch_size=8,
+        per_device_train_batch_size=16,
+        # per_device_eval_batch_size=16,
         num_generations=8,
-        gradient_accumulation_steps=2,
-        max_completion_length=512,
+        gradient_accumulation_steps=4,
+        max_completion_length=1024,
         save_steps=500,              # checkpoint every ~500 steps; terminate manually when ready
         max_steps=270000,            # safety ceiling (~weeks of training); stop manually via Ctrl+C
         report_to="wandb",

@@ -1,0 +1,151 @@
+# Cursor rules — KataGo LLM workspace
+
+Use this file as the **single source of truth** for how this repo works. Prefer it over stale comments in random files.
+
+---
+
+## What this repo is
+
+- **Goal:** Train LLMs to play **9×9 Go** with **GRPO** (Group Relative Policy Optimization), using **KataGo** as the teacher.
+- **Current training stack:** **Qwen/Qwen3-8B** — primary script is **`train_grpo_v4.py`** (dataset `data/training_data_v4.jsonl`).
+- **Legacy:** `train_grpo_v3.py` (v3 dataset), `train_grpo.py` (Qwen2.5-7B v1).
+
+---
+
+## Conventions
+
+- Run commands from **repository root** unless a script says otherwise.
+- **Board:** columns **A–J** (skip **I**), rows **1–9** (1 = bottom). Moves: `C4`, `PASS`.
+- Keep **`VALID_COLS = set("ABCDEFGHJ")`** consistent everywhere it appears.
+- **Qwen3 chat:** always use **`enable_thinking=False`** in `apply_chat_template()` for training and interactive tests — native thinking mode blows the token budget before `MOVE:`.
+
+---
+
+## Environment
+
+**Docker (recommended):**
+```bash
+docker build -f Dockerfile -t katago-llm .
+docker run --gpus all -it -v $(pwd):/workspace -w /workspace katago-llm bash
+```
+
+**Conda (manual):** Python 3.10, PyTorch cu121, then: `transformers datasets accelerate peft trl bitsandbytes pandas scipy wandb sgfmill`.
+
+**KataGo:** binary `KataGo_engine/katago` (executable), weights `KataGo_engine/KataGo18b9x9.gz`. Paths in `src/data_acquiring/get_topk_from_katago/run_katago_analysis.py`.
+
+---
+
+## Data pipeline (v3 JSONL → v4 training set)
+
+Typical v3 flow (each step feeds the next; edit paths in scripts as needed):
+
+1. `filter_9x9.py` → filtered SGFs  
+2. `sgf_to_jsonl.py` → `data/json_output.jsonl`  
+3. `run_katago_analysis.py` → enriched JSONL with KataGo evals  
+4. `prepare_training_data.py` (v3) → e.g. `data/training_ready_data_v3.jsonl`  
+5. `data_quality_cut.py` → `data/training_data_quality_filtered_v3.jsonl`  
+6. `data_augmentation.py` → `data/training_data_augmented_v3.jsonl` (D4 × color)  
+7. Shuffle → `data/training_data_augmented_shuffled_v3.jsonl`
+
+**v4 dataset (do not re-augment):** from the **already augmented** shuffled v3 file, run:
+
+```bash
+python prepare_v4_dataset.py
+```
+
+This builds **`data/training_data_v4.jsonl`**: restores **valid empty coordinates** in each prompt (stripped by augmentation), **downsamples lopsided** positions (root winrate above 0.95 or below 0.05) to **30%**, keeps balanced positions fully, then shuffles (~113k rows as of last run).
+
+---
+
+## Training (Step 9)
+
+**Primary — v4 (recommended):**
+```bash
+python src/model_training/train_grpo_v4.py
+```
+- **Dataset:** `data/training_data_v4.jsonl`  
+- **Output:** `runs/Qwen3-8B-GRPO-Go-Pro-v4`  
+- **Format:** `REASONING:` + `MOVE:` (no `</think>` scaffold)  
+- **`max_completion_length`:** 512  
+- **Rewards:** gate (format + empty intersection) + **log-scaled policy** + **scoreLead rank** among legal moves, with **adaptive weights** from root winrate “closeness”  
+- **Logs:** `src/model_training/logs/grpo_training_rollouts_v4.jsonl`
+
+**Legacy — v3:**
+```bash
+python src/model_training/train_grpo_v3.py
+```
+- Dataset: `data/training_data_augmented_shuffled_v3.jsonl`  
+- Output: `runs/Qwen3-8B-GRPO-Go-Pro-v3`  
+- Composite: `0.5×R_policy + 0.3×R_score + 0.2×R_winrate`; `max_completion_length` 1024  
+
+**Other:** `train_grpo.py` (7B v1), `train_grpo_laptop.py`, `train_grpo_local.py` (smoke).
+
+**VRAM:** Qwen3-8B GRPO is large (on the order of **~68GB+** for v3-style settings; adjust batch/gen if OOM).
+
+---
+
+## Testing & interactive play
+
+```bash
+python test_model.py
+python src/model_training/test_base_model.py
+python src/model_training/test_reward.py          # no GPU
+python src/model_training/test_model_interactive.py   # must use enable_thinking=False + v4 system prompt if testing v4
+```
+
+---
+
+## Reward stacks (short)
+
+**v4 (`train_grpo_v4.py`):**
+1. **Gate:** no `MOVE:` → −1; illegal coord / occupied → −0.5; legal on `.` → 0.  
+2. **Core:** `w_policy × R_policy_log + w_rank × R_rank` (rank = percentile by **scoreLead** over KataGo-evaluated legal moves). Weights depend on **root_winrate** closeness to 0.5.  
+3. **Logging:** non-scoring; JSONL v4.
+
+**v3 (`train_grpo_v3.py`):** gate + `0.5×policy + 0.3×score + 0.2×winrate` + logging v3.
+
+**v1 (`train_grpo.py`):** format/tags + outcome regret + thinking-quality + logging.
+
+---
+
+## Paths to edit before runs
+
+| Script / area | What to check |
+|----------------|---------------|
+| `run_katago_analysis.py` | `KATAGO_EXE`, `CONFIG_FILE`, `MODEL_FILE`, `MAX_LIMIT` |
+| `train_grpo_v4.py` | `DATASET_PATH`, `OUTPUT_DIR` |
+| `train_grpo_v3.py` | `DATASET_PATH`, `OUTPUT_DIR` |
+| `train_grpo.py` | `DATASET_PATH`, `OUTPUT_DIR` |
+| `filter_9x9.py` | `INPUT_DIR`, `OUTPUT_DIR` |
+| `prepare_v4_dataset.py` | `INPUT_FILE`, `OUTPUT_FILE`, lopsided thresholds |
+| `export_gguf_model.sh` | `LORA_CKPT_PATH` (defaults to older 7B run) |
+
+---
+
+## Other components
+
+- **GTP proxy:** `src/interception/` — see `GTP_PROXY_GUIDE.md`.  
+- **Edge / GGUF:** `src/deployment/export_gguf_model.sh` — merge LoRA → llama.cpp → GGUF; artifacts may live as `qwen-7b-go-*.gguf`, `merged-qwen-7b-go/`.
+
+---
+
+## Pitfalls (lessons learned)
+
+- **Native Qwen3 thinking in GRPO:** disable with `enable_thinking=False` or generations truncate before `MOVE:`.  
+- **Augmentation dropped valid-coordinate lists:** v4 dataset script restores them; training prompts must include them for legality.  
+- **Lopsided positions:** most training rows had root winrate near 0 or 1 — v4 downsamples those and uses rank-based core reward so signals aren’t dominated by saturated winrate deltas.  
+- **GRPO:** `num_generations` must work with batch settings (common crash if misaligned).  
+- **Cold start:** binary gate only gives weak gradients; partial credit (−1 / −0.5 / 0) helps early training.
+
+---
+
+## Progress snapshot (update when milestones change)
+
+| Item | Notes |
+|------|--------|
+| v3 data + augmentation | `training_data_augmented_shuffled_v3.jsonl` |
+| v4 dataset | `prepare_v4_dataset.py` → `training_data_v4.jsonl` |
+| v4 training | `train_grpo_v4.py` → `runs/.../v4` |
+| v3 training | Legacy run dir `runs/.../v3` |
+| v1 7B GRPO | Complete (historical W&B runs) |
+| GGUF / edge | Script ready; local artifacts may exist |

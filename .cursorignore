@@ -1,0 +1,35 @@
+# Cursor indexing / semantic search — exclude GB-scale dirs so the IDE stays fast
+# and token-heavy tools do not ingest model weights or huge corpora.
+
+# --- Qwen / HF weights & merged models (incl. .safetensors shards) ---
+.hf_cache/
+.cache/
+.local/
+runs/
+MyModel/
+merged-qwen-7b-go/
+model_quantization/
+
+# KataGo engine bundle (weights .gz, binary)
+KataGo_engine/
+
+# --- Logs & experiment trackers (large JSONL / blobs) ---
+logs/
+src/model_training/logs/
+wandb/
+
+# --- Datasets & massive Go records (JSONL, augmented data, etc.) ---
+data/
+
+# --- Raw / bulk SGF corpora (often millions of files or huge trees) ---
+**/*.sgf
+
+# --- Other heavyweight trees ---
+llama.cpp/
+llama_env/
+KataGo-1.16.4/
+squashfs-root/
+
+# --- Weight / export file patterns (any path) ---
+*.safetensors
+*.gguf

@@ -3,9 +3,11 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
 
 # --- 1. 核心路径配置 ---
-BASE_MODEL = "Qwen/Qwen2.5-7B-Instruct"
-LORA_PATH = "./runs/Qwen2.5-7B-GRPO-Go-Pro-v2/checkpoint-900"  # 请根据实际路径调整
-
+BASE_MODEL = "Qwen/Qwen3-8B"
+# LORA_PATH = "./runs/Qwen2.5-7B-GRPO-Go-Pro-v2/checkpoint-900"  # 请根据实际路径调整
+# Switch between v3 and v4 checkpoints:
+# LORA_PATH = "./runs/Qwen3-8B-GRPO-Go-Pro-v3/checkpoint-500"
+LORA_PATH = "./runs/Qwen3-8B-GRPO-Go-Pro-v4/checkpoint-500"
 print("🔋 正在以全精度 (BF16) 加载基座模型...")
 base_model = AutoModelForCausalLM.from_pretrained(
     BASE_MODEL,
@@ -14,27 +16,21 @@ base_model = AutoModelForCausalLM.from_pretrained(
 )
 tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
 
-print("🧠 正在挂载第 900 步的强化学习外挂 (LoRA 权重)...")
+print(f"🧠 正在挂载 LoRA 权重: {LORA_PATH} ...")
 model = PeftModel.from_pretrained(base_model, LORA_PATH)
 
 # --- 2. 准备系统提示词 ---
-SYSTEM_PROMPT = """You are an expert 9x9 Go (Weiqi) Player. You must determine the best tactical next move.
-The board is a 9x9 grid. Columns are A through J (skipping I), and rows are 1 through 9.
-In the provided board state, '.' represents an empty intersection, 'X' is Black, and 'O' is White.
+SYSTEM_PROMPT = (
+    "You are a 9x9 Go (Weiqi) player. "
+    "Board notation: '.' = empty, 'X' = Black, 'O' = White. "
+    "Columns: A-J (no I). Rows: 1 (bottom) to 9 (top). "
+    "You MUST only play on an empty '.' intersection listed in the valid coordinates.\n\n"
+    "Respond in exactly this format:\n"
+    "REASONING: [2-4 sentences analyzing the position]\n"
+    "MOVE: [coordinate, e.g. D4]"
+)
 
-CRITICAL SPATIAL RULES:
-1. You MUST NOT place a move on a coordinate that already contains an 'X' or 'O'.
-2. You can ONLY play on a coordinate that is currently a '.'.
 
-OUTPUT FORMAT:
-You must strictly follow this exact structure:
-<think>
-Step 1: Analyze the global board state, evaluating territory, influence, and any urgent tactical situations.
-Step 2: Propose 2 to 3 candidate moves and briefly compare their pros and cons.
-Step 3: VERIFY that your final intended move is currently an empty '.' on the board. If it is occupied, pick a different move.
-</think>
-MOVE: [Coordinate] (e.g., MOVE: C4 or MOVE: PASS)
-EXPLAIN: [1-2 short sentences explaining the strategy.]"""
 
 # --- 3. 交互式对话循环 ---
 print("\n" + "="*50)
@@ -74,7 +70,7 @@ while True:
         {"role": "user", "content": user_prompt}
     ]
 
-    text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, enable_thinking=False)
     inputs = tokenizer(text, return_tensors="pt").to("cuda")
 
     print("\n🚀 模型正在思考中...")

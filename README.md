@@ -1,10 +1,14 @@
-# KataGo-LLM-Team: GRPO-Aligned Go AI — Edge-Deployed at 42.5 tok/sec on 8GB VRAM
+# KataGo-LLM-Team: GRPO-Aligned 9×9 Go AI
+
+**Primary training:** [Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B) + GRPO (v4 pipeline) · **Proven edge deployment:** [Qwen2.5-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct) GGUF at ~42.5 tok/sec on 8GB VRAM
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.4-ee4c2c.svg)](https://pytorch.org/)
 [![TRL](https://img.shields.io/badge/TRL-0.29-blueviolet.svg)](https://github.com/huggingface/trl)
 [![llama.cpp](https://img.shields.io/badge/llama.cpp-Edge%20Inference-green.svg)](https://github.com/ggerganov/llama.cpp)
-[![W&B Run](https://img.shields.io/badge/W%26B-training%20run-orange.svg)](https://wandb.ai/brighton_zz-uc-san-diego/huggingface/runs/eb6zhzfo)
+[![W&B — Qwen2.5-7B (historical)](https://img.shields.io/badge/W%26B-Qwen2.5--7B%20run-orange.svg)](https://wandb.ai/brighton_zz-uc-san-diego/huggingface/runs/eb6zhzfo)
+
+> **Repo guide for contributors:** up-to-date paths, commands, and pipeline details live in [`.cursorrules`](.cursorrules).
 
 ---
 
@@ -12,21 +16,25 @@
 
 https://github.com/user-attachments/assets/27d0e772-06e4-4ebd-beec-a5b2c67dda6d
 
-This project bridges two major challenges in modern AI: **algorithmic alignment for spatial reasoning** and **model compression for edge device deployment**.
+This project bridges two challenges: **algorithmic alignment for spatial reasoning** on a 9×9 Go board and **model compression for edge deployment**.
 
-Large language models are not naturally equipped for spatial board games like Go — they lack built-in 2D coordinate reasoning, board legality awareness, and any understanding of territory or life-and-death. We bridge that gap by using [KataGo](https://github.com/lightvector/KataGo) as an expert teacher (for training data generation only) and training [Qwen2.5-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct) with Group Relative Policy Optimization (GRPO). The key insight is an *outcome-regret reward formulation* that forces the model to learn not just "play somewhere reasonable" but "play the best available move."
+Large language models are not naturally equipped for spatial board games — they lack reliable 2D coordinate reasoning, empty-intersection awareness, and tactical structure. We use [KataGo](https://github.com/lightvector/KataGo) as an **expert teacher for data generation only** (not at inference) and train with **Group Relative Policy Optimization (GRPO)**.
 
-**Beyond algorithmic alignment, this project demonstrates a complete full-stack ML pipeline.** The fine-tuned model is compressed into a 4-bit GGUF format and served through a native C++ GTP proxy that relays moves from any standard Go GUI to a locally-hosted LM Studio instance — achieving real-time inference on consumer-grade hardware with zero cloud dependency.
+**Current research track (v4):** [Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B) is trained on a rebuilt dataset (`prepare_v4_dataset.py` → `data/training_data_v4.jsonl`) with **valid empty coordinates restored** in every prompt, **lopsided positions downsampled** (root winrate above 0.95 or below 0.05 kept at 30%), and a **redesigned reward**: partial-credit format/legality gate + **log-scaled KataGo policy** + **scoreLead percentile rank** among legal moves, with weights **adapted by position closeness** (`root_winrate` near 0.5 vs. decided games). Outputs use `REASONING:` + `MOVE:`; Qwen3 native thinking is **disabled** in chat templates (`enable_thinking=False`) so completions stay within budget. See [`src/model_training/train_grpo_v4.py`](src/model_training/train_grpo_v4.py).
+
+**Proven consumer track:** The original **Qwen2.5-7B-Instruct** run used an **outcome-regret** reward; the merged + quantized model ships as **`qwen-7b-go-Q4_K_M.gguf`** and runs locally via **LM Studio** and a **C++ GTP proxy** with Lizzie — real-time inference on consumer GPUs with no cloud dependency. Details below under [Edge deployment (Qwen2.5-7B)](#-edge-deployment-qwen25-7b--proven).
 
 ---
 
 ## 🌟 Key Features & Highlights
 
-* 🧠 **RLHF/GRPO Alignment for Spatial Reasoning:** Designed a multi-layered reward function using KataGo's top-K winrates to penalise regret and prevent reward hacking. The model is trained on ~5,000 board positions derived from 312 expert-curated examples expanded via D4 symmetry augmentation (8 rotations/reflections × colour-flip = 16× expansion). Successfully teaches a text-based LLM the spatial and tactical rules of 9×9 Go.
+* 🧠 **GRPO on Qwen3-8B (v4):** KataGo-grounded rewards combining a **format & empty-intersection gate** (partial credit) with a **composite** of log-scaled move policy and **rank-by-scoreLead** over evaluated legal moves, plus adaptive mixing from root-position winrate. Training: [`train_grpo_v4.py`](src/model_training/train_grpo_v4.py), rollouts: `src/model_training/logs/grpo_training_rollouts_v4.jsonl`, checkpoints: `runs/Qwen3-8B-GRPO-Go-Pro-v4/`. **VRAM:** large single-GPU footprint (on the order of **~68GB+** for comparable batch settings; tune batch / generations if needed).
 
-* ⚡ **Edge-Device Deployment & Compression:** Automated pipeline merges LoRA weights and compresses the Qwen2.5-7B model via 4-bit `Q4_K_M` GGUF quantization, reducing the 14GB+ model to ~4.5GB. Achieves blazing-fast real-time inference on a consumer edge device (**RTX 4060 Laptop GPU, 8GB VRAM**) with **~42.5 tokens/sec** throughput and **0.52s Time-to-First-Token (TTFT)**.
+* ⚡ **Edge deployment (Qwen2.5-7B — proven):** Automated pipeline merges LoRA and compresses **Qwen2.5-7B** to 4-bit **`Q4_K_M` GGUF** (~4.5GB). On **RTX 4060 Laptop (8GB VRAM)**:** ~42.5 tokens/sec**, **~0.52s TTFT**, fully local.
 
-* ⚙️ **C++ Native REST Microservice:** A lightweight, standalone C++ GTP proxy (`gtp_proxy.exe`) built with `cpp-httplib` intercepts GUI commands and sends stateless REST API requests (`POST /v1/chat/completions`) to a local LM Studio server, eliminating all Python overhead from the inference path.
+* ⚙️ **C++ GTP proxy:** Standalone **`gtp_proxy.exe`** (`cpp-httplib`) forwards GTP from Lizzie to LM Studio’s OpenAI-compatible API — no Python on the inference hot path.
+
+* 📦 **Legacy scripts:** [`train_grpo_v3.py`](src/model_training/train_grpo_v3.py) (v3 composite reward, `max_completion_length` 1024); [`train_grpo.py`](src/model_training/train_grpo.py) (v1 four-layer outcome-regret stack, ~5k augmented examples from a small curated set).
 
 ---
 
@@ -34,172 +42,226 @@ Large language models are not naturally equipped for spatial board games like Go
 
 1. [Key Features & Highlights](#-key-features--highlights)
 2. [Architecture Overview](#-architecture-overview)
-3. [Quick Start — End-to-End Edge Deployment](#-quick-start--end-to-end-edge-deployment)
-4. [Automated Deployment Pipeline (For Geeks)](#-automated-deployment-pipeline-for-geeks)
-5. [Training & Algorithm Background](#-training--algorithm-background)
-6. [Results](#-results)
-7. [Citations](#-citations)
+3. [Training & data pipeline](#-training--data-pipeline)
+4. [Training & algorithm background](#-training--algorithm-background)
+5. [Results](#-results)
+6. [Edge deployment (Qwen2.5-7B) — proven](#-edge-deployment-qwen25-7b--proven)
+7. [Automated GGUF pipeline (Qwen2.5-7B)](#-automated-gguf-pipeline-qwen25-7b)
+8. [Citations](#-citations)
 
 ---
 
 ## 🔭 Architecture Overview
 
+Two tracks: **research training (Qwen3-8B v4)** and **published edge path (Qwen2.5-7B GGUF)**.
+
+```mermaid
+flowchart TB
+  subgraph trainTrack [Track A: Training Qwen3-8B v4]
+    SGF[Raw 9x9 SGFs]
+    KA[KataGo analysis]
+    V3Ready[v3 JSONL pipeline quality filter augment]
+    AugShuf["training_data_augmented_shuffled_v3.jsonl ~270k"]
+    PrepV4[prepare_v4_dataset.py]
+    V4DS["training_data_v4.jsonl ~113k"]
+    GRPOv4[train_grpo_v4.py LoRA]
+    SGF --> KA --> V3Ready --> AugShuf --> PrepV4 --> V4DS --> GRPOv4
+  end
+
+  subgraph edgeTrack [Track B: Edge Qwen2.5-7B]
+    LoRA7[GRPO LoRA Qwen2.5-7B]
+    Merge[Merge LoRA CPU]
+    GGUF[qwen-7b-go-Q4_K_M.gguf]
+    LM[LM Studio localhost]
+    Liz[Lizzie GTP]
+    Proxy[gtp_proxy.exe REST]
+    LoRA7 --> Merge --> GGUF --> LM
+    Liz --> Proxy --> LM
+  end
+```
+
+ASCII summary:
+
 ```text
-┌─────────────────────────────────────────┐
-│  Raw SGF Files  (9x9 Go games)          │
-└──────────────┬──────────────────────────┘
-               │  KataGo analysis (training only)
-               ▼
-┌─────────────────────────────────────────┐
-│  GRPO Training  (Qwen2.5-7B + LoRA)     │
-│  Outcome-Regret Reward · D4 Augment     │
-└──────────────┬──────────────────────────┘
-               │  Merge LoRA + 4-bit Quantization
-               ▼
-┌─────────────────────────────────────────┐
-│  qwen-7b-go-Q4_K_M.gguf  (~4.5 GB)      │
-│  Loaded into LM Studio (localhost:1234) │
-└──────────────┬──────────────────────────┘
-               │  ~42.5 tok/sec · 0.52s TTFT
-               ▼
-┌───────────────────────────────────────────────────────────────────┐
-│  Lizzie (Go GUI)  ──GTP──►  gtp_proxy.exe  ──REST──►  LM Studio  │
-└───────────────────────────────────────────────────────────────────┘
+Track A (v4):  SGF → KataGo → v3-ready → augment+shuffle → prepare_v4_dataset → GRPO v4 (Qwen3-8B)
+Track B (7B):  LoRA merge → GGUF → LM Studio ← REST ← gtp_proxy ← Lizzie
 ```
 
 ---
 
-## 🚀 Quick Start — End-to-End Edge Deployment
+## 🧪 Training & data pipeline
 
-### Prerequisites
+Run from repository root unless a script says otherwise.
 
-* **OS:** Windows 11
-* **GPU:** Consumer-grade NVIDIA GPU with **8GB+ VRAM** (e.g. RTX 4060 Laptop)
-* **Software:** [LM Studio](https://lmstudio.ai/) installed
+### v4 dataset (no re-augmentation)
 
----
-
-### Step 1 — Get the Go GUI (Lizzie)
-
-Download and install the latest **Lizzie** release from the official page:
-
-> **[https://github.com/featurecat/lizzie/releases](https://github.com/featurecat/lizzie/releases)**
-
----
-
-### Step 2 — Download the Model
-
-Download the quantized model file `qwen-7b-go-Q4_K_M.gguf` from Hugging Face:
-
-> **[https://huggingface.co/brightonliuzZ/qwen2.5-7b-go-GGUF/tree/main](https://huggingface.co/brightonliuzZ/qwen2.5-7b-go-GGUF/tree/main)**
-
----
-
-### Step 3 — Start the Local LLM Server
-
-1. Open **LM Studio**.
-2. Load `qwen-7b-go-Q4_K_M.gguf` into the model slot.
-3. Navigate to the **Local Server** tab and click **Start Server**.
-4. Confirm the server is listening on `localhost:1234`.
-
----
-
-### Step 4 — Connect the Engine to Lizzie
-
-1. Download the latest **`gtp_proxy_windows.zip`** from the [GitHub Releases page](https://github.com/BrightonLiu-zZ/KataGo-LLM-Team/releases).
-2. Extract `gtp_proxy.exe` to any folder on your machine.
-3. In Lizzie, open **Settings → Engine** and set the engine path to the **absolute path** of `gtp_proxy.exe`. For example:
-   ```
-   C:\tools\gtp_proxy.exe
-   ```
-4. **Do not add any additional arguments** — no `gtp`, no `-model`, no configuration flags. The engine is fully self-contained and connects to LM Studio automatically.
-5. Save settings and restart the engine. Lizzie is now powered by your local GRPO-aligned Go AI.
-
----
-
-## 🔧 Automated Deployment Pipeline (For Geeks)
-
-> **Optional / Advanced** — Only needed if you want to rebuild the GGUF model from scratch (e.g., after continued training).
-
-The script [`src/deployment/export_gguf_model.sh`](src/deployment/export_gguf_model.sh) automates the entire post-training compression lifecycle in four sequential, idempotent phases:
-
-| Phase | What Happens |
-|-------|-------------|
-| **1 — CPU-Bound LoRA Merge** | Merges GRPO LoRA adapters into the base `Qwen2.5-7B-Instruct` model using CPU-only execution (`CUDA_VISIBLE_DEVICES=-1`) to avoid OOM on shared GPU servers. Outputs `./merged-qwen-7b-go`. |
-| **2 — llama.cpp Build** | Clones the `llama.cpp` repository (if absent) and compiles the `llama-quantize` binary via CMake in Release mode. |
-| **3 — FP16 GGUF Conversion** | Creates an isolated Python venv, installs lightweight conversion deps, and converts the merged HuggingFace weights to a full-precision GGUF file (`qwen-7b-go-f16.gguf`). |
-| **4 — 4-bit Quantization** | Runs `llama-quantize` to compress the FP16 GGUF into `Q4_K_M` format, producing the final `qwen-7b-go-Q4_K_M.gguf` (~4.5GB, edge-ready). |
+1. Build the v3 augmented shuffled file via your existing v3 data scripts (quality filter → `data_augmentation.py` → shuffle), producing e.g. **`data/training_data_augmented_shuffled_v3.jsonl`** (~270k rows).
+2. Run:
 
 ```bash
-# Run from repository root (Linux/WSL required)
-bash src/deployment/export_gguf_model.sh
+python prepare_v4_dataset.py
 ```
 
-The script includes fail-fast error handling (`set -e`) and skip-logic so completed phases are not re-executed on rerun.
+This writes **`data/training_data_v4.jsonl`** (~113k rows): **re-adds valid empty coordinates** to each user prompt (they were dropped by augmentation), keeps **30%** of **lopsided** rows (root winrate above 0.95 or below 0.05), keeps all **balanced** rows, then shuffles.
+
+### v4 training
+
+```bash
+python src/model_training/train_grpo_v4.py
+```
+
+Requires `data/training_data_v4.jsonl`. Checkpoints: **`runs/Qwen3-8B-GRPO-Go-Pro-v4/`**.
+
+### v3 / v1 (legacy)
+
+```bash
+python src/model_training/train_grpo_v3.py   # v3: augmented shuffled v3 dataset
+python src/model_training/train_grpo.py      # v1: outcome-regret, smaller ~5k set
+python src/model_training/train_grpo_laptop.py
+python src/model_training/train_grpo_local.py
+```
+
+**v1 data story (historical):** ~312 curated positions → **~5,000** examples via D4 × colour flip (16×). KataGo supplies candidate evaluations for the regret-style reward.
 
 ---
 
-## 📚 Training & Algorithm Background
+## 📚 Training & algorithm background
 
 ### Problem
 
-Text-based LLMs have no innate spatial reasoning for board games. Given an ASCII 9×9 Go board, a base model cannot reliably identify legal moves, detect capture threats, or evaluate territory. Standard supervised fine-tuning on expert moves is insufficient — the model learns to imitate syntax without understanding tactics.
+Text-based LLMs struggle on ASCII boards: legal empty points, occupied intersections, and move quality vs. a strong oracle are all hard without targeted rewards and prompts.
 
-### Approach: GRPO with Outcome-Regret Reward
+### Primary approach: GRPO v4 (Qwen3-8B)
 
-We use **Group Relative Policy Optimization (GRPO)** to train `Qwen2.5-7B-Instruct` with a four-layer reward function. KataGo serves as a pure teacher oracle during data generation — it is not used at inference time.
+KataGo is used only when building **training JSONL** (per-move policy / scoreLead / winrate fields in `katago_evals`). At inference, the LLM does not call KataGo.
 
-**Reward layers (composed inside `GRPOTrainer`):**
+**v4 reward stack** ([`train_grpo_v4.py`](src/model_training/train_grpo_v4.py)):
 
-| Layer | Function | Range |
-|-------|----------|-------|
-| **Format & Legality** | Checks `<|im_start|>…ground` tags; penalises illegal or occupied moves via ASCII board parsing | `[−1.0, +0.2]` |
-| **Thinking Coherence** | Penalises chain-of-thought inconsistency (thinking `D6`, playing `C4`); rewards correct length and top-10 move inclusion | `[−0.5, +0.5]` |
-| **Outcome Regret** | Core signal: $\text{reward} = \text{wr}_{\text{chosen}} - 1.5 \times (\text{wr}_{\text{best}} - \text{wr}_{\text{chosen}})$ — heavily penalises suboptimal moves even in winning positions | `[−1.0, +1.0]` |
-| **Logging** | Non-scoring; samples rollouts to `grpo_training_rollouts.jsonl` for offline analysis | — |
+| Layer | Role |
+|-------|------|
+| **Gate — format & spatial legality** | `MOVE:` missing → −1.0; valid coord but occupied / illegal → −0.5; legal on `.` → 0.0 |
+| **Core — KataGo composite** | For legal moves: **w_policy × R_policy_log + w_rank × R_rank**. `R_policy_log` is log-scaled KataGo prior; `R_rank` is percentile rank by **scoreLead** over legal evaluated moves. **w_policy / w_rank** depend on **closeness** of `root_winrate` to 0.5 (stronger rank weight in close games). |
+| **Logging** | Non-scoring; `src/model_training/logs/grpo_training_rollouts_v4.jsonl` |
 
-The **1.5× regret multiplier** is critical: it breaks the degenerate strategy of "play any legal move in a won game" by making the regret cost exceed the base winrate reward for poor moves.
+**Output format:** `REASONING:` then `MOVE:` (no `</think>` scaffold). **`enable_thinking=False`** in `apply_chat_template()` for training and interactive tests.
 
-### Data Pipeline (Summary)
+### Legacy approaches (short)
 
-312 tactically rich positions are selected from filtered 9×9 SGF games, then expanded to **~5,000 training examples** via:
-- **D4 symmetry augmentation** — 8 transforms (4 rotations × 2 reflections)
-- **Colour flip** — Black ↔ White (total 16× expansion per position)
+| Version | Script | Core idea |
+|---------|--------|-----------|
+| **v3** | `train_grpo_v3.py` | Gate + **0.5×policy + 0.3×score + 0.2×winrate**; `max_completion_length` 1024 |
+| **v1** | `train_grpo.py` | Four layers: format/tags, thinking coherence, **outcome regret** \(\text{wr}_{\text{chosen}} - 1.5(\text{wr}_{\text{best}} - \text{wr}_{\text{chosen}})\), logging |
 
-KataGo analyses each position at 500 visits to supply top-10 candidate moves with winrates, forming the ground truth for the regret reward.
+The **1.5× regret** term in v1 discourages “any legal move in a won game”; v4 instead emphasizes **rank-by-scoreLead** and **log policy** plus dataset balancing for lopsided roots.
 
-### Key Hyperparameters
+### Key hyperparameters
+
+**Qwen3-8B GRPO v4** ([`train_grpo_v4.py`](src/model_training/train_grpo_v4.py)):
+
+| Parameter | Value |
+|-----------|-------|
+| Base model | `Qwen/Qwen3-8B` |
+| Training | GRPO + LoRA (`r=16`, `lora_alpha=32`, dropout `0.05`) |
+| Learning rate | `5e-6` |
+| LR schedule | `constant_with_warmup`, warmup ratio `0.02` |
+| Optimizer | Adam `β1=0.9`, `β2=0.99`, weight decay `0.1` |
+| Batch | `16` / device, grad accum `4`, `num_generations` `8` |
+| Max completion length | `512` |
+| Max steps | `270000` (ceiling; stop manually if desired) |
+| Save steps | `500` |
+| Precision | `bf16` |
+| Logging | W&B (`report_to="wandb"`) |
+
+**Qwen2.5-7B GRPO v1 (historical reference):**
 
 | Parameter | Value |
 |-----------|-------|
 | Base model | `Qwen/Qwen2.5-7B-Instruct` |
-| Training method | GRPO + LoRA (`r=16`, `lora_alpha=32`) |
-| Learning rate | `5e-6` (cosine decay, 10% warmup) |
-| Batch size | `8` per device, `2` grad. accum. (effective 16) |
-| Generations per step | `8` |
-| Max completion length | `1024` tokens |
-| Total steps | `1000` |
-| Precision | `bf16` |
+| Training | GRPO + LoRA (`r=16`, `lora_alpha=32`) |
+| Learning rate | `5e-6` (cosine + ~10% warmup in original run) |
+| Batch | `8` / device, grad accum `2` |
+| Generations | `8` |
+| Max completion length | `1024` |
+| Steps (reported run) | `1000` |
+| Script | `src/model_training/train_grpo.py` |
 
-Training was run on a **48GB VRAM RTX 6000 Ada** using `src/model_training/train_grpo.py`. A memory-optimised laptop variant for Qwen2.5-0.5B is available in `src/model_training/train_grpo_laptop.py`.
+**Qwen3-8B GGUF export:** not documented here; [`export_gguf_model.sh`](src/deployment/export_gguf_model.sh) targets the **7B** merge path by default. Extend or duplicate the pipeline when publishing a v4 GGUF.
 
 ---
 
 ## 📊 Results
 
-Training was tracked with Weights & Biases:
-**[View training run on W&B →](https://wandb.ai/brighton_zz-uc-san-diego/huggingface/runs/eb6zhzfo)**
+### Qwen3-8B v4
 
-The final model checkpoint (LoRA adapters + training artefacts) is saved at `MyModel/Qwen2.5-7B-GRPO-Go-Pro-v1/` (trained with TRL 0.29.0, Transformers 4.57.6, PyTorch 2.9.1).
+Training metrics are logged to **Weights & Biases** when `report_to="wandb"` is enabled; link your project/run URL in your own docs or W&B project page. **No single public run ID is fixed in this README.**
 
-**Edge inference performance (RTX 4060 Laptop, 8GB VRAM, 100% GPU offload):**
+### Qwen2.5-7B v1 (historical)
+
+**[View v1 training run on W&B →](https://wandb.ai/brighton_zz-uc-san-diego/huggingface/runs/eb6zhzfo)**
+
+The v1 checkpoint path described in the original blog-style notes was e.g. `MyModel/Qwen2.5-7B-GRPO-Go-Pro-v1/` (LoRA + artefacts; versions of TRL / Transformers / PyTorch as in that run).
+
+---
+
+## 🚀 Edge deployment (Qwen2.5-7B) — proven
+
+This path uses the **published** **`qwen-7b-go-Q4_K_M.gguf`** (Qwen2.5-7B-based). It is **not** the Qwen3-8B v4 checkpoint.
+
+### Prerequisites
+
+* **OS:** Windows 11
+* **GPU:** NVIDIA **8GB+** VRAM (e.g. RTX 4060 Laptop)
+* **Software:** [LM Studio](https://lmstudio.ai/)
+
+### Step 1 — Get Lizzie
+
+> **[https://github.com/featurecat/lizzie/releases](https://github.com/featurecat/lizzie/releases)**
+
+### Step 2 — Download the GGUF
+
+> **[https://huggingface.co/brightonliuzZ/qwen2.5-7b-go-GGUF/tree/main](https://huggingface.co/brightonliuzZ/qwen2.5-7b-go-GGUF/tree/main)**
+
+File: **`qwen-7b-go-Q4_K_M.gguf`**
+
+### Step 3 — LM Studio
+
+1. Load `qwen-7b-go-Q4_K_M.gguf`.
+2. **Local Server** → Start; default **`localhost:1234`**.
+
+### Step 4 — Lizzie + proxy
+
+1. Download **`gtp_proxy_windows.zip`** from [Releases](https://github.com/BrightonLiu-zZ/KataGo-LLM-Team/releases).
+2. Point Lizzie’s engine to **`gtp_proxy.exe`** (absolute path). **No extra CLI args.**
+
+**Measured edge inference (RTX 4060 Laptop, 8GB VRAM, full GPU offload):**
 
 | Metric | Value |
 |--------|-------|
 | Throughput | ~42.5 tokens/sec |
-| Time-to-First-Token (TTFT) | ~0.52s |
-| Model size on disk | ~4.5GB (Q4_K_M GGUF) |
-| Network overhead | 0 (fully local) |
+| TTFT | ~0.52s |
+| On-disk model | ~4.5GB (Q4_K_M) |
+| Network | 0 (local) |
+
+---
+
+## 🔧 Automated GGUF pipeline (Qwen2.5-7B)
+
+> Rebuild the **7B** GGUF from LoRA after training. Linux/WSL.
+
+[`src/deployment/export_gguf_model.sh`](src/deployment/export_gguf_model.sh):
+
+| Phase | What happens |
+|-------|----------------|
+| **1** | CPU merge of GRPO LoRA into **`Qwen2.5-7B-Instruct`** → `./merged-qwen-7b-go` |
+| **2** | Build `llama.cpp` / `llama-quantize` |
+| **3** | FP16 GGUF → `qwen-7b-go-f16.gguf` |
+| **4** | `Q4_K_M` → `qwen-7b-go-Q4_K_M.gguf` |
+
+```bash
+bash src/deployment/export_gguf_model.sh
+```
+
+Edit **`LORA_CKPT_PATH`** inside the script for your checkpoint.
 
 ---
 
@@ -246,5 +308,15 @@ The final model checkpoint (LoRA adapters + training artefacts) is saved at `MyM
   author  = {Qwen Team},
   year    = {2025},
   url     = {https://arxiv.org/abs/2412.15115}
+}
+```
+
+**Qwen3** (model card / report)
+```bibtex
+@misc{qwen3_2025,
+  title        = {Qwen3},
+  author       = {{Qwen Team}},
+  year         = {2025},
+  howpublished = {\url{https://huggingface.co/Qwen/Qwen3-8B}}
 }
 ```
