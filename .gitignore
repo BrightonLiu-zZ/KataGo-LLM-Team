@@ -46,3 +46,9 @@ nvidia-smi.md
 .cache/
 
 .local/
+
+merged-qwen3-8b-go-v4/
+
+qwen3-8b-go-v4-f16.gguf
+
+qwen3-8b-go-v4-Q4_K_M.gguf
