@@ -202,7 +202,8 @@ static const char* SYSTEM_PROMPT =
     "You MUST only play on an empty '.' intersection listed in the valid coordinates.\n\n"
     "Respond in exactly this format:\n"
     "REASONING: [2-4 sentences analyzing the position]\n"
-    "MOVE: [coordinate, e.g. D4]";
+    "MOVE: [coordinate, e.g. D4]\n\n"
+    "/no_think";
 
 static const char* LM_STUDIO_MODEL = "qwen3-8b-go-v4-Q4_K_M.gguf";
 static const char* LM_STUDIO_HOST  = "localhost";
@@ -237,7 +238,8 @@ static string ask_local_llm(Board& board, const string& color_to_play) {
             {{"role", "user"},   {"content", user_prompt}}
         })},
         {"temperature", 0.1},
-        {"max_tokens", 512}
+        {"max_tokens", 4096},
+        {"chat_template_kwargs", {{"enable_thinking", false}}}
     };
 
     httplib::Client cli(LM_STUDIO_HOST, LM_STUDIO_PORT);
