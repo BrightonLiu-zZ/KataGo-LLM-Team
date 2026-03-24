@@ -205,7 +205,7 @@ static const char* SYSTEM_PROMPT =
     "MOVE: [coordinate, e.g. D4]\n\n"
     "/no_think";
 
-static const char* LM_STUDIO_MODEL = "qwen3-8b-go-v4-Q4_K_M.gguf";
+static const char* LM_STUDIO_MODEL = "qwen/qwen3-8b@q4_k_m";
 static const char* LM_STUDIO_HOST  = "localhost";
 static const int   LM_STUDIO_PORT  = 1234;
 

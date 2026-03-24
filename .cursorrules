@@ -1,6 +1,6 @@
 # Cursor rules — KataGo LLM workspace
 
-Use this file as the **single source of truth** for how this repo works. Prefer it over stale comments in random files.
+Use this file as the **single source of truth** for how this repo works. Prefer it over stale comments in random files. `CLAUDE.md` redirects here.
 
 ---
 
@@ -8,6 +8,7 @@ Use this file as the **single source of truth** for how this repo works. Prefer 
 
 - **Goal:** Train LLMs to play **9×9 Go** with **GRPO** (Group Relative Policy Optimization), using **KataGo** as the teacher.
 - **Current training stack:** **Qwen/Qwen3-8B** — primary script is **`train_grpo_v4.py`** (dataset `data/training_data_v4.jsonl`).
+- **Edge deployment (proven):** v4 checkpoint → GGUF Q4_K_M → **LM Studio** → **C++ GTP proxy** → **Lizzie** (Go GUI). Also supports loading the **un-fine-tuned base model** for comparison.
 - **Legacy:** `train_grpo_v3.py` (v3 dataset), `train_grpo.py` (Qwen2.5-7B v1).
 
 ---
@@ -25,13 +26,23 @@ Use this file as the **single source of truth** for how this repo works. Prefer 
 
 **Docker (recommended):**
 ```bash
+# Production (RTX Ada, vLLM, Flash Attention 2)
 docker build -f Dockerfile -t katago-llm .
 docker run --gpus all -it -v $(pwd):/workspace -w /workspace katago-llm bash
+
+# Local dev (4-bit quant, no vLLM)
+docker build -f Dockerfile.local -t katago-llm-local .
+docker run --gpus all -it -v $(pwd):/workspace -w /workspace katago-llm-local bash
 ```
 
-**Conda (manual):** Python 3.10, PyTorch cu121, then: `transformers datasets accelerate peft trl bitsandbytes pandas scipy wandb sgfmill`.
+**Conda (manual):**
+```bash
+conda create -n katago-llm python=3.10 -y && conda activate katago-llm
+pip install torch==2.4.0 --index-url https://download.pytorch.org/whl/cu121
+pip install transformers datasets accelerate peft trl bitsandbytes pandas scipy wandb sgfmill
+```
 
-**KataGo:** binary `KataGo_engine/katago` (executable), weights `KataGo_engine/KataGo18b9x9.gz`. Paths in `src/data_acquiring/get_topk_from_katago/run_katago_analysis.py`.
+**KataGo:** binary `KataGo_engine/katago` (`chmod +x`), weights `KataGo_engine/KataGo18b9x9.gz`. Paths in `src/data_acquiring/get_topk_from_katago/run_katago_analysis.py`.
 
 ---
 
@@ -39,12 +50,12 @@ docker run --gpus all -it -v $(pwd):/workspace -w /workspace katago-llm bash
 
 Typical v3 flow (each step feeds the next; edit paths in scripts as needed):
 
-1. `filter_9x9.py` → filtered SGFs  
-2. `sgf_to_jsonl.py` → `data/json_output.jsonl`  
-3. `run_katago_analysis.py` → enriched JSONL with KataGo evals  
-4. `prepare_training_data.py` (v3) → e.g. `data/training_ready_data_v3.jsonl`  
-5. `data_quality_cut.py` → `data/training_data_quality_filtered_v3.jsonl`  
-6. `data_augmentation.py` → `data/training_data_augmented_v3.jsonl` (D4 × color)  
+1. `filter_9x9.py` → filtered SGFs
+2. `sgf_to_jsonl.py` → `data/json_output.jsonl`
+3. `run_katago_analysis.py` → enriched JSONL with KataGo evals
+4. `prepare_training_data.py` (v3) → e.g. `data/training_ready_data_v3.jsonl`
+5. `data_quality_cut.py` → `data/training_data_quality_filtered_v3.jsonl`
+6. `data_augmentation.py` → `data/training_data_augmented_v3.jsonl` (D4 × color)
 7. Shuffle → `data/training_data_augmented_shuffled_v3.jsonl`
 
 **v4 dataset (do not re-augment):** from the **already augmented** shuffled v3 file, run:
@@ -63,24 +74,27 @@ This builds **`data/training_data_v4.jsonl`**: restores **valid empty coordinate
 ```bash
 python src/model_training/train_grpo_v4.py
 ```
-- **Dataset:** `data/training_data_v4.jsonl`  
-- **Output:** `runs/Qwen3-8B-GRPO-Go-Pro-v4`  
-- **Format:** `REASONING:` + `MOVE:` (no `</think>` scaffold)  
-- **`max_completion_length`:** 512  
-- **Rewards:** gate (format + empty intersection) + **log-scaled policy** + **scoreLead rank** among legal moves, with **adaptive weights** from root winrate “closeness”  
+- **Dataset:** `data/training_data_v4.jsonl`
+- **Output:** `runs/Qwen3-8B-GRPO-Go-Pro-v4`
+- **Format:** `REASONING:` + `MOVE:` (no `</think>` scaffold)
+- **`max_completion_length`:** 512
+- **Rewards:** gate (format + empty intersection) + **log-scaled policy** + **scoreLead rank** among legal moves, with **adaptive weights** from root winrate "closeness"
 - **Logs:** `src/model_training/logs/grpo_training_rollouts_v4.jsonl`
+- **LoRA:** `r=16`, `lora_alpha=32`, dropout `0.05`, all projection layers
+- **Batch:** `per_device_train_batch_size=16`, `num_generations=8`, `gradient_accumulation_steps=4`
+- **Checkpoints:** every 500 steps
 
 **Legacy — v3:**
 ```bash
 python src/model_training/train_grpo_v3.py
 ```
-- Dataset: `data/training_data_augmented_shuffled_v3.jsonl`  
-- Output: `runs/Qwen3-8B-GRPO-Go-Pro-v3`  
-- Composite: `0.5×R_policy + 0.3×R_score + 0.2×R_winrate`; `max_completion_length` 1024  
+- Dataset: `data/training_data_augmented_shuffled_v3.jsonl`
+- Output: `runs/Qwen3-8B-GRPO-Go-Pro-v3`
+- Composite: `0.5×R_policy + 0.3×R_score + 0.2×R_winrate`; `max_completion_length` 1024
 
-**Other:** `train_grpo.py` (7B v1), `train_grpo_laptop.py`, `train_grpo_local.py` (smoke).
+**Other:** `train_grpo.py` (7B v1), `train_grpo_laptop.py` (0.5B ≤12GB), `train_grpo_local.py` (smoke-test, 5 steps).
 
-**VRAM:** Qwen3-8B GRPO is large (on the order of **~68GB+** for v3-style settings; adjust batch/gen if OOM).
+**VRAM:** Qwen3-8B GRPO needs **~68GB+** (RTX PRO 6000 98GB). v1 Qwen2.5-7B needs ≥48GB. Adjust batch/gen if OOM.
 
 ---
 
@@ -89,8 +103,8 @@ python src/model_training/train_grpo_v3.py
 ```bash
 python test_model.py
 python src/model_training/test_base_model.py
-python src/model_training/test_reward.py          # no GPU
-python src/model_training/test_model_interactive.py   # must use enable_thinking=False + v4 system prompt if testing v4
+python src/model_training/test_reward.py            # no GPU
+python src/model_training/test_model_interactive.py  # must use enable_thinking=False + v4 system prompt if testing v4
 ```
 
 ---
@@ -98,13 +112,70 @@ python src/model_training/test_model_interactive.py   # must use enable_thinking
 ## Reward stacks (short)
 
 **v4 (`train_grpo_v4.py`):**
-1. **Gate:** no `MOVE:` → −1; illegal coord / occupied → −0.5; legal on `.` → 0.  
-2. **Core:** `w_policy × R_policy_log + w_rank × R_rank` (rank = percentile by **scoreLead** over KataGo-evaluated legal moves). Weights depend on **root_winrate** closeness to 0.5.  
+1. **Gate:** no `MOVE:` → −1; illegal coord / occupied → −0.5; legal on `.` → 0.
+2. **Core:** `w_policy × R_policy_log + w_rank × R_rank` (rank = percentile by **scoreLead** over KataGo-evaluated legal moves). Weights depend on **root_winrate** closeness to 0.5.
 3. **Logging:** non-scoring; JSONL v4.
 
 **v3 (`train_grpo_v3.py`):** gate + `0.5×policy + 0.3×score + 0.2×winrate` + logging v3.
 
-**v1 (`train_grpo.py`):** format/tags + outcome regret + thinking-quality + logging.
+**v1 (`train_grpo.py`):** format/tags + outcome regret (`chosen_wr − 1.5 × (best_wr − chosen_wr)`) + thinking-quality (50–800 chars) + logging.
+
+---
+
+## Edge deployment & Lizzie integration
+
+### v4 (Qwen3-8B) — proven
+
+Full pipeline: **LoRA merge → GGUF Q4_K_M → LM Studio → C++ GTP proxy → Lizzie**.
+
+**Quantize (Linux/Docker):**
+```bash
+bash src/deployment/export_gguf_model_v4.sh
+```
+Merges LoRA from `runs/Qwen3-8B-GRPO-Go-Pro-v4/checkpoint-3000` into Qwen3-8B, converts to FP16 GGUF, quantizes to `qwen3-8b-go-v4-Q4_K_M.gguf` (~5GB).
+
+**Build proxy (Windows, Developer Command Prompt):**
+```bat
+cd src\interception
+cl.exe /std:c++17 /EHsc /utf-8 /W4 /O2 gtp_proxy_v4.cpp /Fe:gtp_proxy_v4.exe /link ws2_32.lib
+```
+
+**Run:** Load GGUF in LM Studio → Start Server (port 1234) → point Lizzie engine to `gtp_proxy_v4.exe`.
+
+**Features:**
+- Full 9×9 board state with Go capture logic
+- ASCII board + move history + valid empty coords sent to LLM (matches training prompt format)
+- Model reasoning (`REASONING: ... MOVE: ...`) printed to **stderr** → visible in Lizzie's GTP Console
+- `<think>` tags stripped automatically; only user-facing reasoning shown
+- Invalid move → auto-fallback to `pass`
+
+### Base model comparison (Qwen3-8B un-fine-tuned)
+
+`gtp_proxy_v4_base.cpp` / `gtp_proxy_v4_base.exe` — identical to v4 proxy but points at the **base Qwen3-8B** GGUF (download `Qwen3-8B-Q4_K_M.gguf` from [Qwen/Qwen3-8B-GGUF](https://huggingface.co/Qwen/Qwen3-8B-GGUF) on HuggingFace).
+
+```bat
+cl.exe /std:c++17 /EHsc /utf-8 /W4 /O2 gtp_proxy_v4_base.cpp /Fe:gtp_proxy_v4_base.exe /link ws2_32.lib
+```
+
+LM Studio can load one model at a time on 8GB VRAM. Switch between fine-tuned and base by swapping models + Lizzie engine.
+
+### Legacy v1 (Qwen2.5-7B) — proven
+
+- Script: `src/deployment/legacy_7b/export_gguf_model.sh`
+- Proxy: `gtp_proxy.cpp` / `gtp_proxy.exe`
+- Model: `qwen-7b-go-Q4_K_M.gguf`
+
+### LM Studio notes (v0.4.7+)
+
+- **Model identifiers** use `publisher/model@quant` format (e.g. `qwen/qwen3-8b@q4_k_m`), **not** raw filenames. Custom/manually-loaded GGUFs may still use filenames. Check the error message if loading fails.
+- **Thinking mode:** Qwen3 models default to thinking mode. Disable via: `max_tokens: 4096` (large enough for thinking + response), `/no_think` appended to system prompt, and `"chat_template_kwargs": {"enable_thinking": false}` in the API payload. All three are set in the v4 proxy source.
+
+### Alternative inference backends
+
+- **llama.cpp server:** `./llama.cpp/build/bin/llama-server -m <model>.gguf --port 1234` — same `/v1/chat/completions` API, no proxy changes needed.
+- **Ollama:** install from [ollama.com](https://ollama.com/), create a `Modelfile`, change `LM_STUDIO_PORT` to `11434`.
+
+See **`src/interception/GTP_PROXY_GUIDE.md`** for full setup guide.
 
 ---
 
@@ -112,40 +183,42 @@ python src/model_training/test_model_interactive.py   # must use enable_thinking
 
 | Script / area | What to check |
 |----------------|---------------|
-| `run_katago_analysis.py` | `KATAGO_EXE`, `CONFIG_FILE`, `MODEL_FILE`, `MAX_LIMIT` |
+| `run_katago_analysis.py` | `KATAGO_EXE`, `CONFIG_FILE`, `MODEL_FILE`, `MAX_LIMIT` (default 100) |
 | `train_grpo_v4.py` | `DATASET_PATH`, `OUTPUT_DIR` |
 | `train_grpo_v3.py` | `DATASET_PATH`, `OUTPUT_DIR` |
 | `train_grpo.py` | `DATASET_PATH`, `OUTPUT_DIR` |
 | `filter_9x9.py` | `INPUT_DIR`, `OUTPUT_DIR` |
 | `prepare_v4_dataset.py` | `INPUT_FILE`, `OUTPUT_FILE`, lopsided thresholds |
-| `export_gguf_model.sh` | `LORA_CKPT_PATH` (defaults to older 7B run) |
-
----
-
-## Other components
-
-- **GTP proxy:** `src/interception/` — see `GTP_PROXY_GUIDE.md`.  
-- **Edge / GGUF:** `src/deployment/export_gguf_model.sh` — merge LoRA → llama.cpp → GGUF; artifacts may live as `qwen-7b-go-*.gguf`, `merged-qwen-7b-go/`.
+| `export_gguf_model_v4.sh` | `LORA_CKPT_PATH`, `BASE_MODEL` |
+| `export_gguf_model.sh` | `LORA_CKPT_PATH` (defaults to `runs/Qwen2.5-7B-GRPO-Go-Pro-v2/checkpoint-1000`) |
+| `gtp_proxy_v4.cpp` | `LM_STUDIO_MODEL`, `LM_STUDIO_HOST`, `LM_STUDIO_PORT` |
+| `gtp_proxy_v4_base.cpp` | `LM_STUDIO_MODEL` (must match LM Studio's identifier for the base model) |
 
 ---
 
 ## Pitfalls (lessons learned)
 
-- **Native Qwen3 thinking in GRPO:** disable with `enable_thinking=False` or generations truncate before `MOVE:`.  
-- **Augmentation dropped valid-coordinate lists:** v4 dataset script restores them; training prompts must include them for legality.  
-- **Lopsided positions:** most training rows had root winrate near 0 or 1 — v4 downsamples those and uses rank-based core reward so signals aren’t dominated by saturated winrate deltas.  
-- **GRPO:** `num_generations` must work with batch settings (common crash if misaligned).  
+- **Native Qwen3 thinking in GRPO:** disable with `enable_thinking=False` or generations truncate before `MOVE:`. In training, Qwen3's native mode can produce 500+ tokens of `<think>` before any useful output.
+- **LM Studio thinking mode (inference):** even with `enable_thinking=False`, LM Studio may route Qwen3 output to `reasoning_content` instead of `content`, causing empty responses. Fix: set `max_tokens: 4096` and append `/no_think` to system prompt. See "LM Studio notes" section above.
+- **LM Studio model identifiers (v0.4.7+):** models downloaded via LM Studio search use `publisher/model@quant` format, not filenames. Manually loaded GGUFs may differ.
+- **Augmentation dropped valid-coordinate lists:** v4 dataset script restores them; training prompts must include them for legality.
+- **Lopsided positions:** most training rows had root winrate near 0 or 1 — v4 downsamples those and uses rank-based core reward so signals aren't dominated by saturated winrate deltas.
+- **GRPO:** `num_generations` must divide evenly into batch settings (common crash if misaligned).
 - **Cold start:** binary gate only gives weak gradients; partial credit (−1 / −0.5 / 0) helps early training.
+- **Windows compilation:** `cl.exe` requires **Developer Command Prompt for Visual Studio**, not regular PowerShell. Alternative: MinGW `g++ -std=c++17 -O2 -o proxy.exe proxy.cpp -lws2_32`.
 
 ---
 
-## Progress snapshot (update when milestones change)
+## Progress snapshot (as of 2026-03-23)
 
-| Item | Notes |
+| Item | Status |
 |------|--------|
-| v3 data + augmentation | `training_data_augmented_shuffled_v3.jsonl` |
-| v4 dataset | `prepare_v4_dataset.py` → `training_data_v4.jsonl` |
-| v4 training | `train_grpo_v4.py` → `runs/.../v4` |
-| v3 training | Legacy run dir `runs/.../v3` |
-| v1 7B GRPO | Complete (historical W&B runs) |
-| GGUF / edge | Script ready; local artifacts may exist |
+| v3 data + augmentation | Complete — `training_data_augmented_shuffled_v3.jsonl` |
+| v4 dataset | Complete — `prepare_v4_dataset.py` → `training_data_v4.jsonl` (~113k rows) |
+| v4 training | Complete — `runs/Qwen3-8B-GRPO-Go-Pro-v4/checkpoint-3000` |
+| v4 GGUF export | Complete — `export_gguf_model_v4.sh` → `qwen3-8b-go-v4-Q4_K_M.gguf` |
+| v4 Lizzie integration | Complete — `gtp_proxy_v4.exe` with board tracking, capture logic, reasoning output to GTP Console |
+| Base model in Lizzie | Complete — `gtp_proxy_v4_base.exe` with `Qwen3-8B-Q4_K_M.gguf` |
+| v3 training | Complete — legacy run dir `runs/.../v3` |
+| v1 7B GRPO | Complete — W&B run `hardy-river-3` |
+| v1 7B edge deployment | Complete — `qwen-7b-go-Q4_K_M.gguf`, legacy files in `src/deployment/legacy_7b/` |
