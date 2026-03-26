@@ -14,7 +14,7 @@
 
 ## About The Project
 
-https://github.com/user-attachments/assets/27d0e772-06e4-4ebd-beec-a5b2c67dda6d
+https://github.com/user-attachments/assets/441f4623-8106-4288-a5b3-990be05d6aae
 
 This project bridges two challenges: **algorithmic alignment for spatial reasoning** on a 9×9 Go board and **model compression for edge deployment**.
 
