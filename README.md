@@ -40,6 +40,49 @@ The fine-tuned model is **quantized to 4-bit GGUF** and deployed locally via **L
 
 ---
 
+## HuggingFace Artifacts
+
+### Repos at a glance
+
+| Repo | What's in it | Who needs it |
+|------|-------------|--------------|
+| [brightonliuzZ/qwen3-8b-go-v4](https://huggingface.co/brightonliuzZ/qwen3-8b-go-v4) | Full-precision merged model + **Q4_K_M GGUF** | Everyone (see below) |
+| [brightonliuzZ/qwen2.5-7b-go](https://huggingface.co/brightonliuzZ/qwen2.5-7b-go) | Legacy 7B full-precision merged model + **Q4_K_M GGUF** | Legacy users |
+| [brightonliuzZ/grpo-go-checkpoints](https://huggingface.co/brightonliuzZ/grpo-go-checkpoints) | Raw LoRA checkpoints (v1/v2/v3) | Researchers resuming training |
+| [brightonliuzZ/katago-grpo-datasets](https://huggingface.co/datasets/brightonliuzZ/katago-grpo-datasets) | v3 augmented training data | Data / research use |
+| [brightonliuzZ/qwen2.5-7b-and-qwen3-8b-go-GGUF-legacy](https://huggingface.co/brightonliuzZ/qwen2.5-7b-and-qwen3-8b-go-GGUF-legacy) | Older GGUF releases | Historical reference |
+
+### What are all these files?
+
+Each model repo (`qwen3-8b-go-v4`, `qwen2.5-7b-go`) contains two categories of files:
+
+**Category 1 — GGUF file (what most users want)**
+
+| File | Size | Purpose |
+|------|------|---------|
+| `qwen3-8b-go-v4-Q4_K_M.gguf` | ~5 GB | 4-bit quantized model. **Load directly in LM Studio** to play Go via Lizzie. Runs on 8GB VRAM. |
+| `qwen-7b-go-Q4_K_M.gguf` | ~4.5 GB | Same idea, legacy 7B model. |
+
+**→ If you just want to play Go with the AI, download only the `.gguf` file.**
+
+**Category 2 — Full-precision model files (advanced use)**
+
+These files together form the complete model in HuggingFace/PyTorch format:
+
+| File(s) | Purpose |
+|---------|---------|
+| `model-000XX-of-000XX.safetensors` | The actual model weights, split into shards (~5 GB each). Needed for fine-tuning or re-quantizing. |
+| `config.json` | Model architecture config (num layers, hidden size, etc.). Required to load the model in Python. |
+| `tokenizer.json`, `tokenizer_config.json`, `vocab.json`, `merges.txt` | Tokenizer files — converts text ↔ token IDs. Required for training and inference in Python. |
+| `generation_config.json` | Default generation parameters (temperature, max tokens, etc.). |
+| `chat_template.jinja` | Defines how conversations are formatted before being passed to the model. |
+| `added_tokens.json`, `special_tokens_map.json` | Special tokens added during fine-tuning (e.g. pad token). |
+| `.gitattributes` | Tells git-lfs which files are stored as large binary blobs (the safetensors shards). Not a model file. |
+
+**→ You only need these if you want to:** run the model in Python (`transformers`), continue fine-tuning, or produce a new GGUF with different quantization.
+
+---
+
 ## Table of Contents
 
 1. [Key Features & Highlights](#key-features--highlights)
@@ -237,7 +280,7 @@ The fine-tuned Qwen3-8B v4 model is quantized to 4-bit GGUF and runs locally on 
 | **OS** | Windows 11 |
 | **GPU** | NVIDIA 8GB+ VRAM (e.g. RTX 4060 Laptop) |
 | **Software** | [LM Studio](https://lmstudio.ai/), [Lizzie](https://github.com/featurecat/lizzie/releases) |
-| **GGUF model** | `qwen3-8b-go-v4-Q4_K_M.gguf` — produced by `export_gguf_model_v4.sh` |
+| **GGUF model** | `qwen3-8b-go-v4-Q4_K_M.gguf` — download from [brightonliuzZ/qwen3-8b-go-v4](https://huggingface.co/brightonliuzZ/qwen3-8b-go-v4) or produce with `export_gguf_model_v4.sh` |
 | **GTP proxy** | `gtp_proxy_v4.exe` — built from `gtp_proxy_v4.cpp` |
 
 ### Quick start
@@ -285,7 +328,7 @@ This path uses the **published** **`qwen-7b-go-Q4_K_M.gguf`** (Qwen2.5-7B-based)
 
 ### Step 2 — Download the GGUF
 
-> **[https://huggingface.co/brightonliuzZ/qwen2.5-7b-go-GGUF/tree/main](https://huggingface.co/brightonliuzZ/qwen2.5-7b-go-GGUF/tree/main)**
+> **[https://huggingface.co/brightonliuzZ/qwen2.5-7b-go](https://huggingface.co/brightonliuzZ/qwen2.5-7b-go)**
 
 File: **`qwen-7b-go-Q4_K_M.gguf`**
 
