@@ -27,8 +27,6 @@ KataGo-1.16.4/
 
 src/model_training/logs/
 
-CLAUDE.md
-
 .hf_cache/
 
 .claude/
@@ -52,3 +50,11 @@ merged-qwen3-8b-go-v4/
 qwen3-8b-go-v4-f16.gguf
 
 qwen3-8b-go-v4-Q4_K_M.gguf
+
+demo_videos/
+
+.cursorignore
+
+.cursorrules
+
+Dockerfile.local
