@@ -8,7 +8,14 @@ echo "============================================================"
 
 # --- Path configuration ---
 BASE_MODEL="Qwen/Qwen3-8B"
-LORA_CKPT_PATH="./runs/Qwen3-8B-GRPO-Go-Pro-v4/checkpoint-3000"
+# NOTE: this used to point at checkpoint-3000, which produced the GGUF currently
+# published on HuggingFace (brightonliuzZ/qwen3-8b-go-v4). That adapter no longer
+# exists anywhere — it was removed in the 2026-04-06 cleanup and lost for good in
+# the 2026-05-06 incident (see docs/RECOVERY-2026-05-06.md). The surviving local
+# v4 adapters are checkpoint-1500 and checkpoint-5000; 5000 is the furthest
+# trained, so it is the default here. Re-running this script therefore produces a
+# DIFFERENT model from the one published on HuggingFace.
+LORA_CKPT_PATH="./runs/Qwen3-8B-GRPO-Go-Pro-v4/checkpoint-5000"
 MERGED_MODEL_DIR="./merged-qwen3-8b-go-v4"
 
 FP16_GGUF_PATH="./qwen3-8b-go-v4-f16.gguf"

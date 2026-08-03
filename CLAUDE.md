@@ -2,6 +2,15 @@
 
 Single source of truth for this repo. Prefer this over stale comments in random files.
 
+**Companion docs:**
+
+- [`CONTEXT.md`](./CONTEXT.md) — glossary. What the project's terms mean, and which
+  synonyms to avoid. Read it before naming anything new.
+- [`docs/adr/`](./docs/adr/) — why the hard-to-reverse decisions were made the way
+  they were.
+- [`docs/RECOVERY-2026-05-06.md`](./docs/RECOVERY-2026-05-06.md) — the 2026-05-06
+  data-loss incident: what was lost permanently, what was rebuilt and how.
+
 ---
 
 ## What this repo is
@@ -45,6 +54,14 @@ pip install transformers datasets accelerate peft trl bitsandbytes pandas scipy 
 
 **KataGo:** binary `KataGo_engine/katago` (`chmod +x`), weights `KataGo_engine/KataGo18b9x9.gz`. Paths in `src/data_acquiring/get_topk_from_katago/run_katago_analysis.py`.
 
+The binary is CUDA-linked and needs `libcublas.so.12` + `libcudnn.so.9`, which the
+bare host does not have — running it directly fails with a shared-library error.
+It has always been run inside the CUDA container. Rebuild that image from
+`Dockerfile` if it is missing. The weights currently in place are
+`kata1-b18c384nbt-s9996604416-d4316597426` re-downloaded from katagotraining.org;
+the original net file was lost and its exact identity is unknown, so KataGo evals
+generated from here on will not be bit-identical to the v3 corpus.
+
 ---
 
 ## Data pipeline (v3 JSONL → v4 training set)
@@ -65,7 +82,24 @@ Typical v3 flow (each step feeds the next; edit paths in scripts as needed):
 python prepare_v4_dataset.py
 ```
 
-This builds **`data/training_data_v4.jsonl`**: restores **valid empty coordinates** in each prompt (stripped by augmentation), **downsamples lopsided** positions (root winrate above 0.95 or below 0.05) to **30%**, keeps balanced positions fully, then shuffles (~113k rows as of last run).
+This builds **`data/training_data_v4.jsonl`**: restores **valid empty coordinates** in each prompt (stripped by augmentation), **downsamples lopsided** positions (root winrate above 0.95 or below 0.05) to **30%**, keeps balanced positions fully, then shuffles (113,404 rows).
+
+**Where the chain is broken.** Steps 1–4 cannot be re-run against the original
+corpus: `data/json_output_with_topk_official.jsonl` (18,493 positions, ~48
+GPU-hours of KataGo analysis) and `data/training_ready_data_v3.jsonl` were
+destroyed on 2026-05-06 and exist nowhere. The pipeline is intact from step 6
+onward because `training_data_augmented_v3.jsonl` had been archived to HF.
+
+Step 5's output was rebuilt by inverting step 6 — the augmenter tags identity
+records with `_aug0`, so they can be selected and un-suffixed:
+
+```bash
+python src/data_acquiring/get_train_ready_data/reconstruct_quality_filtered_from_augmented.py
+```
+
+Yields 16,875 records, matching the original count exactly. To rebuild the corpus
+from scratch you need the source SGFs (last known location: a Windows machine,
+`D:\katago_old\9x9_online_go_game`) and a full re-run of steps 1–4.
 
 ---
 
@@ -190,7 +224,7 @@ See **`src/interception/GTP_PROXY_GUIDE.md`** for full setup guide.
 | `train_grpo.py` | `DATASET_PATH`, `OUTPUT_DIR` |
 | `filter_9x9.py` | `INPUT_DIR`, `OUTPUT_DIR` |
 | `prepare_v4_dataset.py` | `INPUT_FILE`, `OUTPUT_FILE`, lopsided thresholds |
-| `export_gguf_model_v4.sh` | `LORA_CKPT_PATH`, `BASE_MODEL` |
+| `export_gguf_model_v4.sh` | `LORA_CKPT_PATH` (now `checkpoint-5000`; the published GGUF came from the lost `checkpoint-3000`), `BASE_MODEL` |
 | `export_gguf_model.sh` | `LORA_CKPT_PATH` (defaults to `runs/Qwen2.5-7B-GRPO-Go-Pro-v2/checkpoint-1000`) |
 | `gtp_proxy_v4.cpp` | `LM_STUDIO_MODEL`, `LM_STUDIO_HOST`, `LM_STUDIO_PORT` |
 | `gtp_proxy_v4_base.cpp` | `LM_STUDIO_MODEL` (must match LM Studio's identifier for the base model) |
@@ -276,45 +310,65 @@ Regular `rm` (single files) works as long as the **parent directory** is `tyliu`
 
 ---
 
-## Local workspace layout (post-cleanup, 2026-04-06)
+## Local workspace layout (post-recovery, 2026-08-02)
 
-| Path | Role | Keep? |
-|------|------|-------|
-| `data/training_data_v4.jsonl` | Active training dataset | Yes |
-| `data/json_output.jsonl` | KataGo-enriched JSONL (v3 pipeline source) | Yes |
-| `data/training_ready_data_v3.jsonl` | v3 pipeline intermediate | Yes |
-| `data/training_data_quality_filtered_v3.jsonl` | v3 quality-filtered intermediate | Yes |
-| `runs/Qwen3-8B-GRPO-Go-Pro-v4/checkpoint-1500` | v4 LoRA checkpoint | Yes |
-| `runs/Qwen3-8B-GRPO-Go-Pro-v4/checkpoint-5000` | v4 latest LoRA checkpoint | Yes |
-| `runs/Qwen2.5-7B-GRPO-Go-Pro-v1/checkpoint-800` | v1 latest (also on HF) | Yes |
-| `runs/Qwen2.5-7B-GRPO-Go-Pro-v2/checkpoint-1000` | v2 latest (also on HF) | Yes |
-| `qwen3-8b-go-v4-Q4_K_M.gguf` | Active deployment GGUF (also on HF) | Yes |
-| `KataGo_engine/` | KataGo binary + weights for data generation | Yes |
-| `llama.cpp/` | Used by export script to quantize | Yes |
-| `model_quantization/` | `merge_lora.py` + legacy 7B GGUFs | Partial |
+Everything below was verified present on 2026-08-02 after the workspace was
+rebuilt. See [`docs/RECOVERY-2026-05-06.md`](./docs/RECOVERY-2026-05-06.md) for
+what happened and how each item got here.
 
-**Deleted / archived to HF:**
-- `merged-qwen3-8b-go-v4/` → HF `qwen3-8b-go-v4`
-- `merged-qwen-7b-go/` (both copies) → HF `qwen2.5-7b-go`
-- `qwen3-8b-go-v4-f16.gguf` — deleted (quantization intermediate)
-- `model_quantization/qwen-7b-go-f16.gguf` — deleted (quantization intermediate)
-- `model_quantization/qwen-7b-go-Q4_K_M.gguf` → HF `qwen2.5-7b-go`
-- `data/training_data_augmented_v3.jsonl` → HF `katago-grpo-datasets`
-- `data/training_data_augmented_shuffled_v3.jsonl` — deleted
-- v1/v2/v3 non-latest checkpoints — deleted
+| Path | Size | Role |
+|------|------|------|
+| `data/training_data_v4.jsonl` | 0.8 G | **Active training dataset** — 113,404 records |
+| `data/training_data_augmented_shuffled_v3.jsonl` | 1.8 G | v4 dataset source — 270,000 records |
+| `data/training_data_augmented_v3.jsonl` | 1.8 G | From HF; the only surviving dataset of the incident |
+| `data/training_data_quality_filtered_v3.jsonl` | 0.1 G | 16,875 records, reconstructed from the augmented file |
+| `runs/Qwen3-8B-GRPO-Go-Pro-v4/checkpoint-5000` | | v4 LoRA, furthest trained (step 5000, epoch 0.35) |
+| `runs/Qwen3-8B-GRPO-Go-Pro-v4/checkpoint-1500` | | v4 LoRA (step 1500, epoch 0.11) |
+| `runs/Qwen2.5-7B-GRPO-Go-Pro-v1/checkpoint-800` | | v1 latest (also on HF) |
+| `runs/Qwen2.5-7B-GRPO-Go-Pro-v2/checkpoint-1000` | | v2 latest (also on HF) |
+| `qwen3-8b-go-v4-Q4_K_M.gguf` | 5.0 G | Deployment GGUF (from HF; built from the lost checkpoint-3000) |
+| `merged-qwen3-8b-go-v4/` | 31 G | Full-precision merged v4 (from HF) |
+| `KataGo_engine/katago` + `KataGo18b9x9.gz` | 0.2 G | Engine for data generation. **Needs CUDA 12 + cuDNN 9 — run it inside Docker, not on the bare host.** |
+| `KataGo-1.16.4/`, `llama.cpp/`, `llama_env/`, `wandb/`, `squashfs-root/` | | Survived the incident untouched |
+
+**Not present, and not recoverable** (details in the recovery doc):
+`data/json_output_with_topk_official.jsonl`, `data/training_ready_data_v3.jsonl`,
+`runs/Qwen3-8B-GRPO-Go-Pro-v4/checkpoint-3000`, all
+`src/model_training/logs/grpo_training_rollouts_*.jsonl`,
+`model_quantization/`, `src/interception/python/`,
+`src/data_acquiring/old_scripts/`, `demo_videos/`, the `katallm:v2` Docker image.
+
+**Archived to HF in the 2026-04-06 cleanup** (deliberate, and it is why recovery
+was possible at all): `merged-qwen3-8b-go-v4/` and `merged-qwen-7b-go/` →
+`qwen3-8b-go-v4` / `qwen2.5-7b-go`; `qwen-7b-go-Q4_K_M.gguf` → `qwen2.5-7b-go`;
+`training_data_augmented_v3.jsonl` → `katago-grpo-datasets`. FP16 GGUF
+intermediates were deleted as regenerable.
 
 ---
 
-## Progress snapshot (as of 2026-04-06)
+## Progress snapshot (as of 2026-08-02)
 
 | Item | Status |
 |------|--------|
-| v3 data + augmentation | Complete — archived to HF |
-| v4 dataset | Complete — `training_data_v4.jsonl` (~113k rows) |
-| v4 training | Complete — checkpoints 1500 and 5000 kept locally |
+| v3 data + augmentation | Complete — on HF |
+| v4 dataset | Complete — `training_data_v4.jsonl`, 113,404 rows |
+| v4 training | Complete — checkpoints 1500 and 5000 local |
 | v4 GGUF export | Complete — `qwen3-8b-go-v4-Q4_K_M.gguf` locally + on HF |
 | v4 Lizzie integration | Complete — `gtp_proxy_v4.exe` with board tracking, capture logic, reasoning output |
 | Base model in Lizzie | Complete — `gtp_proxy_v4_base.exe` with `Qwen3-8B-Q4_K_M.gguf` |
 | v1 7B GRPO | Complete — W&B run `hardy-river-3` |
 | v1 7B edge deployment | Complete — `qwen-7b-go-Q4_K_M.gguf` on HF |
-| Workspace cleanup | Complete — ~150G freed, all artifacts archived to HF |
+| Workspace cleanup (2026-04-06) | Complete — ~150G freed, artifacts archived to HF |
+| **Workspace recovery (2026-08-02)** | **Complete — see `docs/RECOVERY-2026-05-06.md`** |
+
+### Known gaps to close
+
+- `checkpoint-5000` has never been merged, quantized or played against. The
+  published GGUF is from the lost `checkpoint-3000`, so the best surviving
+  adapter is currently unexercised.
+- `checkpoint-1500` and `checkpoint-5000` exist only on this server. Upload them
+  to `brightonliuzZ/grpo-go-checkpoints` — that is the exact gap that made
+  `checkpoint-3000` unrecoverable.
+- v4 training reached epoch 0.35 of a 270,000-step schedule. Resuming is possible
+  from `checkpoint-5000` but needs `data/training_data_v4.jsonl`, which is now
+  back in place.
