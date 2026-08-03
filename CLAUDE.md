@@ -16,7 +16,8 @@ Single source of truth for this repo. Prefer this over stale comments in random 
 ## What this repo is
 
 - **Goal:** Train LLMs to play **9×9 Go** with **GRPO** (Group Relative Policy Optimization), using **KataGo** as the teacher.
-- **Current training stack:** **Qwen/Qwen3-8B** — primary script is **`train_grpo_v4.py`** (dataset `data/training_data_v4.jsonl`).
+- **Current training stack:** **Qwen/Qwen3-8B** — active experiment is **exp05** (**`train_grpo_v5.py`**, datasets from `prepare_v5_split.py`, rationale in ADR 0006). Last completed run: exp04 (`train_grpo_v4.py`, `data/training_data_v4.jsonl`).
+- **Experiment ↔ W&B mapping and the exp04 post-mortem:** `notebooks/exp01-04_analysis.ipynb` (executed; data cached in `notebooks/data/`).
 - **Edge deployment (proven):** v4 checkpoint → GGUF Q4_K_M → **LM Studio** → **C++ GTP proxy** → **Lizzie** (Go GUI). Also supports loading the **un-fine-tuned base model** for comparison.
 - **Legacy:** `train_grpo_v3.py` (v3 dataset), `train_grpo.py` (Qwen2.5-7B v1).
 
@@ -105,7 +106,20 @@ from scratch you need the source SGFs (last known location: a Windows machine,
 
 ## Training
 
-**Primary — v4 (recommended):**
+**Active — v5 / exp05 (prepared, not yet run):**
+```bash
+python prepare_v5_split.py                       # once: leakage-safe train/eval split
+python src/model_training/train_grpo_v5.py
+```
+- **Datasets:** `data/training_data_v5_train.jsonl` (105,596 rows) + `data/eval_positions_v5.jsonl` (502 held-out positions, split by source game — row-wise splitting would leak augmentation variants)
+- **Output:** `runs/Qwen3-8B-GRPO-Go-Pro-v5`
+- **Reward:** v4 gate + core unchanged, plus a **reasoning layer** (`reward_v5.py`): coordinate mention +0.05, length window down to −0.1, group dedup down to −0.1. CPU tests: `python src/model_training/test_reward_v5.py`
+- **Config vs v4:** lr **2e-6** constant, **warmup_steps=100** (absolute), **max_steps=10000**, **num_generations=16**, grad_accum=8, **temperature=1.15**, **epsilon_high=0.28**, **scale_rewards="batch"**, adaptive entropy (target 0.5), eval every 500 steps, `save_total_limit=6`, vLLM colocate + sleep mode (`USE_VLLM=False` in the script to fall back)
+- **Requires:** TRL ≥1.8 — Dockerfile pins `trl[vllm]==1.9.2` on a CUDA 12.8 base (Blackwell/sm_120); the script fails fast if a required knob is missing
+- **Stopping rule:** eval reward flat for 4 consecutive evals (2,000 steps) → stop manually
+- **Why all of it:** `docs/adr/0006-entropy-preserving-grpo-config-v5.md`
+
+**Previous — v4 (exp04, completed):**
 ```bash
 python src/model_training/train_grpo_v4.py
 ```
@@ -136,15 +150,18 @@ python src/model_training/train_grpo_v3.py
 ## Testing & interactive play
 
 ```bash
-python test_model.py
-python src/model_training/test_base_model.py
-python src/model_training/test_reward.py            # no GPU
+python src/model_training/test_reward_v5.py          # no GPU — v5 reward unit tests
 python src/model_training/test_model_interactive.py  # must use enable_thinking=False + v4 system prompt if testing v4
 ```
 
 ---
 
 ## Reward stacks (short)
+
+**v5 (`train_grpo_v5.py` + `reward_v5.py`):** v4 gate + core unchanged, plus
+reasoning layer in `[−0.2, +0.05]`: coordinate mention (+0.05), length window
+(<200 chars → down to −0.1), within-group bigram-overlap penalty (down to
+−0.1; breaks same-move reward ties → fewer zero-variance groups). Logging v5.
 
 **v4 (`train_grpo_v4.py`):**
 1. **Gate:** no `MOVE:` → −1; illegal coord / occupied → −0.5; legal on `.` → 0.
@@ -219,6 +236,8 @@ See **`src/interception/GTP_PROXY_GUIDE.md`** for full setup guide.
 | Script / area | What to check |
 |----------------|---------------|
 | `run_katago_analysis.py` | `KATAGO_EXE`, `CONFIG_FILE`, `MODEL_FILE`, `MAX_LIMIT` (default 100) |
+| `train_grpo_v5.py` | `TRAIN_DATASET_PATH`, `EVAL_DATASET_PATH`, `OUTPUT_DIR`, `USE_VLLM` |
+| `prepare_v5_split.py` | `INPUT_FILE`, `EVAL_TARGET`, `SEED` |
 | `train_grpo_v4.py` | `DATASET_PATH`, `OUTPUT_DIR` |
 | `train_grpo_v3.py` | `DATASET_PATH`, `OUTPUT_DIR` |
 | `train_grpo.py` | `DATASET_PATH`, `OUTPUT_DIR` |
@@ -360,6 +379,8 @@ intermediates were deleted as regenerable.
 | v1 7B edge deployment | Complete — `qwen-7b-go-Q4_K_M.gguf` on HF |
 | Workspace cleanup (2026-04-06) | Complete — ~150G freed, artifacts archived to HF |
 | **Workspace recovery (2026-08-02)** | **Complete — see `docs/RECOVERY-2026-05-06.md`** |
+| exp01–04 analysis (2026-08-03) | Complete — `notebooks/exp01-04_analysis.ipynb`, W&B curves cached |
+| **exp05 (v5) preparation (2026-08-03)** | **Complete — reward+script+tests+split+Dockerfile ready (ADR 0006); training not started** |
 
 ### Known gaps to close
 

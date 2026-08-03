@@ -89,12 +89,40 @@ _Avoid_: cleaning, curation, quality filter
 
 ### Training
 
-**Dataset generation** (v1 / v3 / v4):
+**Dataset generation** (v1 / v3 / v4 / v5):
 A numbered iteration of the whole stack — dataset schema, reward function and
 training script move together, so "v4" always means all three at once
 (`training_data_v4.jsonl` + `train_grpo_v4.py` + the v4 reward). v2 exists only
 as a checkpoint; there is no v2 dataset or script.
 _Avoid_: version, revision, run
+
+**Experiment** (exp01 … exp05):
+One actual training run, numbered in launch order, as distinct from the
+generation of the stack it ran. exp01 = W&B `hardy-river-3` (v1),
+exp02 = `true-darkness-4` (v3, died at step ~130 to truncation),
+exp03 = `drawn-meadow-5` (v3), exp04 = `fiery-firebrand-6` (v4,
+`checkpoint-5000`), exp05 = the first v5 run. A generation can have several
+experiments; an experiment belongs to exactly one generation.
+_Avoid_: run number, attempt, trial
+
+**Reasoning reward**:
+The v5 reward layer that scores the `REASONING:` text itself — coordinate
+mention, a minimum-length window, and dissimilarity from the sibling
+generations of the same prompt. Capped well below the KataGo core signal so it
+can shape the prose without outbidding the move quality.
+_Avoid_: CoT reward, style reward, thinking-quality reward (that is the v1 term)
+
+**Held-out split**:
+The evaluation positions excluded from v5 training, chosen by source game so
+that no symmetry variant of an evaluated position leaks into the training set.
+"Held out by game, evaluated by identity record."
+_Avoid_: test set, validation set
+
+**Entropy collapse**:
+The exp04 failure mode: token entropy and completion length fall together as
+the policy narrows, groups return identical rewards, and gradients vanish. The
+v5 config exists to oppose it.
+_Avoid_: mode collapse, distribution collapse
 
 **Gate reward**:
 The first, non-negotiable reward component: it checks that the completion

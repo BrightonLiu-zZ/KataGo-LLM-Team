@@ -58,3 +58,12 @@ demo_videos/
 .cursorrules
 
 Dockerfile.local
+
+tmp/
+
+__pycache__/
+
+# Un-ignore the notebook cache (small parquet + text fixtures) that the
+# top-level `data/` rule would otherwise swallow
+!notebooks/data/
+!notebooks/data/**
