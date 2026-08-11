@@ -16,7 +16,7 @@ Single source of truth for this repo. Prefer this over stale comments in random 
 ## What this repo is
 
 - **Goal:** Train LLMs to play **9×9 Go** with **GRPO** (Group Relative Policy Optimization), using **KataGo** as the teacher.
-- **Current training stack:** **Qwen/Qwen3-8B** — active experiment is **exp05** (**`train_grpo_v5.py`**, datasets from `prepare_v5_split.py`, rationale in ADR 0006). Last completed run: exp04 (`train_grpo_v4.py`, `data/training_data_v4.jsonl`).
+- **Current training stack:** **Qwen/Qwen3-8B** — active experiment is **exp05c** (**`train_grpo_v5.py`** launched via `run_with_restart.sh`, datasets from `prepare_v5_split.py`, rationale in ADR 0006 + Amendments 2–4; exp05 and exp05b were both stopped after diagnosed bugs, see Pitfalls). Last completed run: exp04 (`train_grpo_v4.py`, `data/training_data_v4.jsonl`).
 - **Experiment ↔ W&B mapping and the exp04 post-mortem:** `notebooks/exp01-04_analysis.ipynb` (executed; data cached in `notebooks/data/`).
 - **Edge deployment (proven):** v4 checkpoint → GGUF Q4_K_M → **LM Studio** → **C++ GTP proxy** → **Lizzie** (Go GUI). Also supports loading the **un-fine-tuned base model** for comparison.
 - **Legacy:** `train_grpo_v3.py` (v3 dataset), `train_grpo.py` (Qwen2.5-7B v1).
@@ -25,6 +25,14 @@ Single source of truth for this repo. Prefer this over stale comments in random 
 
 ## Git conventions
 
+- **Committing and pushing is governed by the `commit-and-push` skill**
+  (`.claude/skills/commit-and-push/SKILL.md` — deliberately **not** in version
+  control, since `.claude/` is gitignored; recreate it on a new machine) — it
+  is the authority on batching
+  (one commit per file), message style (**no `feat:`/`chore:` prefixes**), what
+  may be touched (only files already changed in `git status`), and the push
+  flow (commit everything, push once at the end). Follow it whenever asked to
+  commit, push, or land the current changes.
 - **Never add `Co-Authored-By: Claude` (or any AI attribution) to commit messages.** Commits are authored solely by the human developer.
 - Run commands from **repository root** unless a script says otherwise.
 - **Board:** columns **A–J** (skip **I**), rows **1–9** (1 = bottom). Moves: `C4`, `PASS`.
@@ -106,17 +114,46 @@ from scratch you need the source SGFs (last known location: a Windows machine,
 
 ## Training
 
-**Active — v5 / exp05 (prepared, not yet run):**
+**Active — v5c / exp05c (running, W&B `lc4hyp23`):** the first run of this
+generation that actually learns — core reward 0.401 → 0.492 over 1,500 steps
+(~1.5× exp04's rate) with entropy held at 0.52 and length at 88 tokens, and
+held-out eval core 0.4853 → 0.5059. Two dead runs preceded it, each
+root-caused in ADR 0006:
+- exp05 (W&B `tijdgbfj`, ~1490 steps): ~5× effective-step-size deficit
+  (`scale_rewards="batch"` ~3× + TRL `sequence_mask` vLLM-IS tax ×0.59) —
+  fixed by exp05b's two knobs (Amendment 2).
+- exp05b (~2000 steps): TRL 1.9.2 upstream bug ([trl#5312]) — with
+  `vllm_enable_sleep_mode=True`, `generate()` calls
+  `collective_rpc("reload_weights")` *after* `sync_weights()`, reloading the
+  **base model from disk** every step; all rollouts and evals in exp05/05b
+  came from the frozen base policy. `train_grpo_v5.py` now monkey-patches
+  the fix (mirrors unreleased TRL PR #5313; remove when a TRL release ships
+  it), validated by a checkpoint-initialized smoke (Amendment 3).
+
+Watch on W&B: `importance_sampling_ratio/mean` ~0.99 and *stable* (exp05b
+decayed 1.0→0.66 = sync broken again) — currently 0.992; core-reward slope —
+holding; `frac_reward_zero_std` — **at ~23%, above the <15% target**, flat
+since step 750; sustained growth past ~30% means exp04's collapse is back.
 ```bash
 python prepare_v5_split.py                       # once: leakage-safe train/eval split
-python src/model_training/train_grpo_v5.py
+
+# Long runs: always launch through the wrapper. exp05c hit a random C-extension
+# crash (`none_dealloc`) at step 1616; the wrapper resumes from the newest
+# checkpoint and refuses to restart-loop on a genuinely broken config.
+WANDB_RUN_ID=lc4hyp23 WANDB_RESUME=allow \
+  bash src/model_training/run_with_restart.sh
+
+# Bare invocation (smoke tests, fresh experiments):
+python src/model_training/train_grpo_v5.py       # RESUME_FROM=auto to continue
 ```
 - **Datasets:** `data/training_data_v5_train.jsonl` (105,596 rows) + `data/eval_positions_v5.jsonl` (502 held-out positions, split by source game — row-wise splitting would leak augmentation variants)
-- **Output:** `runs/Qwen3-8B-GRPO-Go-Pro-v5`
+- **Output:** `runs/Qwen3-8B-GRPO-Go-Pro-v5c` (the dead runs left `…-v5/checkpoint-{500,1000}` and `…-v5b/checkpoint-{500,1000,1500}`; kept as evidence)
 - **Reward:** v4 gate + core unchanged, plus a **reasoning layer** (`reward_v5.py`): coordinate mention +0.05, length window down to −0.1, group dedup down to −0.1. CPU tests: `python src/model_training/test_reward_v5.py`
-- **Config vs v4:** lr **2e-6** constant, **warmup_steps=100** (absolute), **max_steps=10000**, **num_generations=16**, grad_accum=8, **temperature=1.15**, **epsilon_high=0.28**, **scale_rewards="batch"**, adaptive entropy (target 0.5), eval every 500 steps, `save_total_limit=6`, vLLM colocate + sleep mode (`USE_VLLM=False` in the script to fall back)
-- **Requires:** TRL ≥1.8 — Dockerfile pins `trl[vllm]==1.9.2` on a CUDA 12.8 base (Blackwell/sm_120); the script fails fast if a required knob is missing
-- **Stopping rule:** eval reward flat for 4 consecutive evals (2,000 steps) → stop manually
+- **Config vs v4:** lr **2e-6** constant, **warmup_steps=100** (absolute), **max_steps=10000**, **num_generations=16**, grad_accum=8, **temperature=1.15**, **epsilon_high=0.28**, **scale_rewards="group"** (exp05b; exp05's `"batch"` shrank gradients ~3×), **vllm_importance_sampling_mode="token_truncate"** (exp05b; the `sequence_mask` default taxed every gradient ×0.59), adaptive entropy (target 0.5), eval every 500 steps, **`save_steps=200`** (must stay below the crash interval — see Pitfalls), `save_total_limit=6`, vLLM colocate with **`vllm_enable_sleep_mode=False`** (Amendment 5; `USE_VLLM=False` in the script to fall back entirely)
+- **GPU footprint:** ~**88.7 GB of 97.9 GB (90.6%)**, steady state, since sleep mode was disabled. Shared server — coordinate before launching. If a co-tenant needs more than ~9 GB, try `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` first (torch reserves 85.4 GiB while allocating only 62.7 GiB), then lower `vllm_gpu_memory_utilization` (tight below 0.2: the 8B weights alone need ~16 GB)
+- **Requires:** TRL ≥1.8 — Dockerfile pins `trl==1.9.2` + vLLM `0.25.1+cu129` (GitHub wheel) on a **CUDA 12.9** base. The 12.9/cu129 combination is forced by the host's 12.8 driver (570.x, no sudo): cu130 wheels won't initialize, vLLM's bundled flash-attention is PTX-only for sm_120 (driver can't JIT it) so the script injects `attention_backend=FLASHINFER`, and flashinfer's sm_120 JIT needs nvcc ≥12.9 in the container. The script fails fast if a required knob is missing. Smoke-tested 2026-08-04: ~40s/step, ~68 min per full eval, est. 5.5 days for 10k steps
+- **Stopping rule:** eval reward flat for 4 consecutive evals (2,000 steps) → stop manually. Note this rule assumes "learned then plateaued" — a curve that is flat *from step 0* is a bug, not a plateau; triage it with the recipe under Pitfalls instead of waiting out 2,000 steps
+- **Resume:** `RESUME_FROM=auto` (newest checkpoint in `OUTPUT_DIR`) or a checkpoint path; a crash costs up to `save_steps` = 500 steps ≈ 5 h
 - **Why all of it:** `docs/adr/0006-entropy-preserving-grpo-config-v5.md`
 
 **Previous — v4 (exp04, completed):**
@@ -236,7 +273,8 @@ See **`src/interception/GTP_PROXY_GUIDE.md`** for full setup guide.
 | Script / area | What to check |
 |----------------|---------------|
 | `run_katago_analysis.py` | `KATAGO_EXE`, `CONFIG_FILE`, `MODEL_FILE`, `MAX_LIMIT` (default 100) |
-| `train_grpo_v5.py` | `TRAIN_DATASET_PATH`, `EVAL_DATASET_PATH`, `OUTPUT_DIR`, `USE_VLLM` |
+| `train_grpo_v5.py` | `TRAIN_DATASET_PATH`, `EVAL_DATASET_PATH`, `OUTPUT_DIR`, `USE_VLLM`; env `RESUME_FROM` |
+| `run_with_restart.sh` | env `MAX_RESTARTS`, `MIN_HEALTHY_SECONDS`, `WANDB_RUN_ID` (reads `OUTPUT_DIR` from the trainer) |
 | `prepare_v5_split.py` | `INPUT_FILE`, `EVAL_TARGET`, `SEED` |
 | `train_grpo_v4.py` | `DATASET_PATH`, `OUTPUT_DIR` |
 | `train_grpo_v3.py` | `DATASET_PATH`, `OUTPUT_DIR` |
@@ -260,6 +298,110 @@ See **`src/interception/GTP_PROXY_GUIDE.md`** for full setup guide.
 - **GRPO:** `num_generations` must divide evenly into batch settings (common crash if misaligned).
 - **Cold start:** binary gate only gives weak gradients; partial credit (−1 / −0.5 / 0) helps early training.
 - **Windows compilation:** `cl.exe` requires **Developer Command Prompt for Visual Studio**, not regular PowerShell. Alternative: MinGW `g++ -std=c++17 -O2 -o proxy.exe proxy.cpp -lws2_32`.
+
+### GRPO / TRL training — the flatline family
+
+exp05, exp05b and exp05c between them burned ~5 days of GPU on runs whose
+reward curves were flat. All three causes were invisible in the reward panels
+alone. **Before committing to any multi-day run, do the pre-flight below.**
+
+- **Pre-flight (30 minutes, catches all three):** run ~10 steps twice — once
+  from the base model, once initialized from a *trained* checkpoint
+  (`PeftModel.from_pretrained(base, ckpt, is_trainable=True)` passed as
+  `model=`, with `peft_config=None`). If the two runs produce the same reward
+  level, generation is not seeing the trained weights. Then check
+  `sampling/importance_sampling_ratio/mean` ≈ 0.99 on step 1.
+- **A flat reward curve does not mean "the config is wrong."** Triage in this
+  order, all cheap and offline (`tmp/discriminate_v5.py` does 1–3):
+  1. `‖lora_B‖_F` across consecutive checkpoints (`lora_B` starts at exactly
+     0) — flat/tiny ⇒ the *trainer* is not learning; growing ⇒ it is, and the
+     problem is downstream in generation.
+  2. Rescore real rollout completions from the log under base vs
+     base+checkpoint. Per-token IS ratio ≈ 1.0 ⇒ the policy never moved.
+  3. `importance_sampling_ratio/mean` **trend**: a constant <1 value is a
+     gradient tax; a monotonic decay (1.0 → 0.66) means trainer and sampler
+     are diverging, i.e. **weight sync is broken**.
+  4. Rollout log: ring distribution of moves, early window vs late. Frozen
+     distribution + frozen text = generation from a frozen policy.
+- **Silent gradient shrink (exp05, ~5× too slow):** `scale_rewards="batch"`
+  divides advantages by the batch-wide std instead of the per-group std (~3×
+  smaller), and TRL's default `vllm_importance_sampling_mode="sequence_mask"`
+  multiplies each sequence's loss by exp(Σ per-token logp diff) — a ~×0.59 tax
+  from harmless per-token kernel mismatch. **Use `scale_rewards="group"` and
+  `vllm_importance_sampling_mode="token_truncate"`** unless you can defend
+  otherwise; both are set in `train_grpo_v5.py`.
+- **vLLM sleep-mode weight sync (exp05b, [trl#5312]):** with
+  `vllm_enable_sleep_mode=True`, TRL ≤1.9.2 calls
+  `collective_rpc("reload_weights")` inside `generate()` *after*
+  `sync_weights()`; with no arguments that **reloads the base model from
+  disk**, so every rollout and every eval comes from the frozen base policy.
+  `train_grpo_v5.py` monkey-patches the fix (mirrors TRL PR #5313, merged
+  2026-07-28, unreleased as of 1.9.2). **Delete the patch once a TRL release
+  contains #5313** — check before upgrading TRL.
+- **`frac_reward_zero_std` lies under `scale_rewards="batch"`:** TRL derives
+  it from whichever std the scaling mode produced, so under `"batch"` it reads
+  ~0 regardless. Only comparable across runs that use `"group"`.
+- **Reward-scale changes make curves incomparable across experiments** (ADR
+  0002); compare rank/eval metrics, not raw reward, when the stack changed.
+
+### Container & CUDA environment
+
+- **Never pipe `docker build` into `tail`/`head`.** The pipe swallows the exit
+  code: a build that died on "no space left on device" reported success and
+  the failure only surfaced hours later. Run it unpiped, or check
+  `${PIPESTATUS[0]}`.
+- **`docker exec` with a heredoc needs `-i`**, otherwise stdin is not
+  forwarded and the script silently does nothing.
+- **Blackwell (sm_120) on this host's 12.8 driver** needs the whole chain in
+  the Dockerfile comments: cu129 wheels (not cu130), CUDA 12.9 base image (for
+  flashinfer's JIT), and `attention_backend=FLASHINFER` injected into TRL's
+  vLLM constructor. Misleading symptom to recognise: flashinfer reports
+  "requires GPUs with sm75 or higher" when the real error is "SM 12.x requires
+  CUDA >= 12.9".
+- **vLLM sizes its KV cache for the model's native context** (40,960 tokens
+  for Qwen3) and refuses to start inside a small memory budget — cap it with
+  `vllm_max_model_length`.
+- **transformers 5.x `apply_chat_template(tokenize=True)` returns a dict,**
+  not a list of ids — `len()` on it gives 2 and silently corrupts any
+  prompt-length measurement. Use `tokenize=False` then tokenize explicitly.
+
+### Running long jobs
+
+- **Random C-extension crashes are expected on multi-day runs.** exp05c died
+  at step 1616 with `Fatal Python error: none_dealloc` (refcount bug in a C
+  extension — vLLM/FlashInfer/Triton/numba are all loaded). Nothing to fix in
+  the config. **Launch through `src/model_training/run_with_restart.sh`**,
+  which resumes from the newest checkpoint, keeps the W&B curve continuous
+  (`WANDB_RUN_ID=<id> WANDB_RESUME=allow`), and refuses to restart-loop on a
+  genuinely broken config (3 fast failures ⇒ abort).
+- **`save_steps` must stay below the observed crash interval.** exp05c's
+  second crash came 3.6 h in while checkpoints were 5.3 h apart (500 steps ×
+  38 s), so the restart rolled back from step 1834 to 1500 and was on course
+  to repeat that forever — **progress can livelock with no error message**,
+  and the wrapper's fast-failure guard cannot see it because each attempt runs
+  for hours. Now `save_steps=200` (~2.1 h). `save_total_limit` caps the disk
+  cost regardless of the interval, so shortening it is nearly free.
+- **vLLM sleep mode is a liability on long runs** (disabled since ADR 0006
+  Amendment 5). Sleep level 2 frees vLLM's weights, and every `wake_up()` must
+  re-map ~16 GB of *physical* memory while torch holds most of the card
+  (measured: 62.7 GiB allocated vs **85.4 GiB reserved** — a 22.7 GiB
+  fragmentation gap). exp05c crash #2 was exactly that:
+  `CUDA Error: out of memory at cumem_allocator.cpp:163` inside
+  `sync_weights() → wake_up()`. Turning it off also makes the trl#5312 patch
+  inert, since both it and TRL's buggy `reload_weights` sit behind the same
+  `enable_sleep_mode` guard. Cost: 48.6 GB → 88.7 GB steady state.
+- **A training script must support resume from day one.** `trainer.train()`
+  with no arguments cannot continue a crashed run; `train_grpo_v5.py` takes
+  `RESUME_FROM=auto` (or a checkpoint path). A crash costs up to `save_steps`
+  of progress — at 500 steps × ~38s that is ~5 hours.
+- **In tmux, detach with `Ctrl-B` then `D`.** Typing `exit` inside the window
+  ends the shell, and the last window closing destroys the session (harmless
+  for data — checkpoints and logs are on disk — but the scrollback with the
+  crash traceback goes with it).
+- **Smoke-test copies must redirect every output path**, including the final
+  `trainer.save_model(OUTPUT_DIR)` — a sed-generated smoke copy once wrote
+  into the real run directory. Also `PYTHONPATH=src/model_training` when
+  running a copy from `tmp/`, or `reward_v5` will not import.
 
 ---
 
@@ -346,7 +488,7 @@ what happened and how each item got here.
 | `runs/Qwen2.5-7B-GRPO-Go-Pro-v1/checkpoint-800` | | v1 latest (also on HF) |
 | `runs/Qwen2.5-7B-GRPO-Go-Pro-v2/checkpoint-1000` | | v2 latest (also on HF) |
 | `qwen3-8b-go-v4-Q4_K_M.gguf` | 5.0 G | Deployment GGUF (from HF; built from the lost checkpoint-3000) |
-| `merged-qwen3-8b-go-v4/` | 31 G | Full-precision merged v4 (from HF) |
+| ~~`merged-qwen3-8b-go-v4/`~~ | — | Full-precision merged v4 — **deleted 2026-08-03 to free disk**. Re-download from HF `brightonliuzZ/qwen3-8b-go-v4` if needed (see `docs/RECOVERY-2026-05-06.md` for the command). |
 | `KataGo_engine/katago` + `KataGo18b9x9.gz` | 0.2 G | Engine for data generation. **Needs CUDA 12 + cuDNN 9 — run it inside Docker, not on the bare host.** |
 | `KataGo-1.16.4/`, `llama.cpp/`, `llama_env/`, `wandb/`, `squashfs-root/` | | Survived the incident untouched |
 
@@ -380,7 +522,10 @@ intermediates were deleted as regenerable.
 | Workspace cleanup (2026-04-06) | Complete — ~150G freed, artifacts archived to HF |
 | **Workspace recovery (2026-08-02)** | **Complete — see `docs/RECOVERY-2026-05-06.md`** |
 | exp01–04 analysis (2026-08-03) | Complete — `notebooks/exp01-04_analysis.ipynb`, W&B curves cached |
-| **exp05 (v5) preparation (2026-08-03)** | **Complete — reward+script+tests+split+Dockerfile ready (ADR 0006); training not started** |
+| exp05 (v5) preparation (2026-08-03) | Complete — reward+script+tests+split+Dockerfile ready (ADR 0006) |
+| exp05 run (2026-08-04→05) | **Stopped at ~1490 steps** — flatline; root cause = ~5× effective-step-size deficit (ADR 0006 Amendment 2); weight sync exonerated by `tmp/discriminate_v5.py` |
+| exp05b run (2026-08-05→06) | **Stopped at ~2000 steps** — flat again; trainer learned (`‖lora_B‖`=1.05) but vLLM generated from frozen base: TRL 1.9.2 sleep-mode `reload_weights` bug (trl#5312, ADR 0006 Amendment 3) |
+| **exp05c (v5c, 2026-08-06 →)** | **Running (W&B `lc4hyp23`) — first curve that learns: core 0.401→0.492 @1500 steps, eval core 0.4853→0.5059, entropy 0.52 stable. Crashed once at step 1616 (`none_dealloc`, random C-extension bug); resumed. Now launched via `run_with_restart.sh` (ADR 0006 Amendment 4)** |
 
 ### Known gaps to close
 
