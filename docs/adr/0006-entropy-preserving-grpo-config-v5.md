@@ -334,3 +334,22 @@ interval can loop forever without ever saving, and the wrapper's crash-loop
 guard cannot see it (each attempt runs for hours, far above
 `MIN_HEALTHY_SECONDS`). 200 steps ≈ 2.1 h is comfortably under. Disk cost is
 unchanged: `save_total_limit=6` × 512 MB ≈ 3 GB.
+
+### Correction (2026-08-11): that `save_steps` change never took effect
+
+exp05c's checkpoints stayed **500 apart for the rest of the run**.
+`training_args.bin` in `checkpoint-6000` records `save_steps=200`, but
+`trainer_state.json` records 500 — and the state is what counts.
+`DefaultFlowCallback` decides when to save from `state.save_steps`
+(`transformers/trainer_callback.py:586`), and resuming calls
+`TrainerState.load_from_json()` (`trainer.py:1556`), which restores the value
+baked into the checkpoint. `args.save_steps` is silently overridden, with no
+warning.
+
+Because exp05c resumed from `checkpoint-1500` — written while the setting was
+still 500 — the fix was inert for the whole run. It cost nothing this time:
+disabling sleep mode removed the crashes entirely (55 h, zero crashes, to step
+6000). But the general rule matters and is now in the project docs:
+**`save_steps`, `eval_steps` and `logging_steps` only take effect on a fresh
+run.** To change one mid-generation, either start fresh or edit
+`trainer_state.json` in the checkpoint being resumed from.
