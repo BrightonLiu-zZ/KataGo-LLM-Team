@@ -149,7 +149,7 @@ python src/model_training/train_grpo_v5.py       # RESUME_FROM=auto to continue
 - **Datasets:** `data/training_data_v5_train.jsonl` (105,596 rows) + `data/eval_positions_v5.jsonl` (502 held-out positions, split by source game — row-wise splitting would leak augmentation variants)
 - **Output:** `runs/Qwen3-8B-GRPO-Go-Pro-v5c` (the dead runs left `…-v5/checkpoint-{500,1000}` and `…-v5b/checkpoint-{500,1000,1500}`; kept as evidence)
 - **Reward:** v4 gate + core unchanged, plus a **reasoning layer** (`reward_v5.py`): coordinate mention +0.05, length window down to −0.1, group dedup down to −0.1. CPU tests: `python src/model_training/test_reward_v5.py`
-- **Config vs v4:** lr **2e-6** constant, **warmup_steps=100** (absolute), **max_steps=10000**, **num_generations=16**, grad_accum=8, **temperature=1.15**, **epsilon_high=0.28**, **scale_rewards="group"** (exp05b; exp05's `"batch"` shrank gradients ~3×), **vllm_importance_sampling_mode="token_truncate"** (exp05b; the `sequence_mask` default taxed every gradient ×0.59), adaptive entropy (target 0.5), eval every 500 steps, **`save_steps=200`** (must stay below the crash interval — see Pitfalls), `save_total_limit=6`, vLLM colocate with **`vllm_enable_sleep_mode=False`** (Amendment 5; `USE_VLLM=False` in the script to fall back entirely)
+- **Config vs v4:** lr **2e-6** constant, **warmup_steps=100** (absolute), **max_steps=10000**, **num_generations=16**, grad_accum=8, **temperature=1.15**, **epsilon_high=0.28**, **scale_rewards="group"** (exp05b; exp05's `"batch"` shrank gradients ~3×), **vllm_importance_sampling_mode="token_truncate"** (exp05b; the `sequence_mask` default taxed every gradient ×0.59), adaptive entropy (target 0.5), eval every 500 steps, **`save_steps=200`** (must stay below the crash interval; note exp05c actually saved every 500 because a resumed run keeps the checkpoint's value — see Pitfalls), `save_total_limit=6`, vLLM colocate with **`vllm_enable_sleep_mode=False`** (Amendment 5; `USE_VLLM=False` in the script to fall back entirely)
 - **GPU footprint:** ~**88.7 GB of 97.9 GB (90.6%)**, steady state, since sleep mode was disabled. Shared server — coordinate before launching. If a co-tenant needs more than ~9 GB, try `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` first (torch reserves 85.4 GiB while allocating only 62.7 GiB), then lower `vllm_gpu_memory_utilization` (tight below 0.2: the 8B weights alone need ~16 GB)
 - **Requires:** TRL ≥1.8 — Dockerfile pins `trl==1.9.2` + vLLM `0.25.1+cu129` (GitHub wheel) on a **CUDA 12.9** base. The 12.9/cu129 combination is forced by the host's 12.8 driver (570.x, no sudo): cu130 wheels won't initialize, vLLM's bundled flash-attention is PTX-only for sm_120 (driver can't JIT it) so the script injects `attention_backend=FLASHINFER`, and flashinfer's sm_120 JIT needs nvcc ≥12.9 in the container. The script fails fast if a required knob is missing. Smoke-tested 2026-08-04: ~40s/step, ~68 min per full eval, est. 5.5 days for 10k steps
 - **Stopping rule:** eval reward flat for 4 consecutive evals (2,000 steps) → stop manually. Note this rule assumes "learned then plateaued" — a curve that is flat *from step 0* is a bug, not a plateau; triage it with the recipe under Pitfalls instead of waiting out 2,000 steps
@@ -379,8 +379,19 @@ alone. **Before committing to any multi-day run, do the pre-flight below.**
   38 s), so the restart rolled back from step 1834 to 1500 and was on course
   to repeat that forever — **progress can livelock with no error message**,
   and the wrapper's fast-failure guard cannot see it because each attempt runs
-  for hours. Now `save_steps=200` (~2.1 h). `save_total_limit` caps the disk
-  cost regardless of the interval, so shortening it is nearly free.
+  for hours. `save_total_limit` caps the disk cost regardless of the interval,
+  so shortening it is nearly free.
+- **`save_steps` / `eval_steps` / `logging_steps` cannot be changed on a
+  resumed run.** `DefaultFlowCallback` reads `state.save_steps`
+  (`transformers/trainer_callback.py:586`), and
+  `TrainerState.load_from_json()` restores that value from the checkpoint
+  (`trainer.py:1556`), **silently overriding `args.save_steps`**. The script
+  now sets 200, but exp05c resumed from a checkpoint written under 500 and
+  kept saving every 500 steps for the rest of the run — `training_args.bin`
+  said 200, `trainer_state.json` said 500, and the state won. No warning is
+  emitted. These knobs only take effect on a **fresh** run; to change one
+  mid-flight you must edit `trainer_state.json` in the checkpoint you resume
+  from.
 - **vLLM sleep mode is a liability on long runs** (disabled since ADR 0006
   Amendment 5). Sleep level 2 frees vLLM's weights, and every `wake_up()` must
   re-map ~16 GB of *physical* memory while torch holds most of the card
