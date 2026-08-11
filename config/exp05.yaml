@@ -1,0 +1,309 @@
+# =============================================================================
+# exp05 — full reproducibility snapshot
+# =============================================================================
+# First run of the v5 generation: entropy-preserving GRPO config +
+# reasoning-aware reward. Qwen3-8B learns 9x9 Go from KataGo labels.
+#
+# STATUS  : ready-to-run. Smoke-tested 2026-08-04 (10 steps, healthy metrics).
+#           The real 10,000-step run has NOT been launched yet.
+# AUTHORITY: this file is a hand-maintained SNAPSHOT for reproduction. No code
+#           reads it. The executable source of truth is the CONFIG dict in
+#           src/model_training/train_grpo_v5.py (values below are verbatim
+#           copies) and the constants in src/model_training/reward_v5.py.
+#           If they ever disagree, the scripts win — then fix this file.
+# WHY     : docs/adr/0006-entropy-preserving-grpo-config-v5.md (incl. the
+#           2026-08-03 amendment), evidence in notebooks/exp01-04_analysis.ipynb.
+# GLOSSARY: CONTEXT.md (experiment vs generation numbering, held-out split,
+#           entropy collapse, reasoning reward, ...).
+#
+# Historical configs quoted in the `changed:` fields below come from the true
+# W&B records cached in notebooks/data/run_configs.json — not from memory.
+# exp01=hardy-river-3 (v1, Qwen2.5-7B), exp02=true-darkness-4 (v3, dead run),
+# exp03=drawn-meadow-5 (v3), exp04=fiery-firebrand-6 (v4, checkpoint-5000).
+
+experiment:
+  id: exp05
+  generation: v5            # dataset schema + reward + training script move together
+  wandb_project: brighton_zz-uc-san-diego/huggingface
+  wandb_run_name: exp05-grpo-v5
+  # The entity is pinned via WANDB_ENTITY/WANDB_PROJECT in train_grpo_v5.py.
+  # Without it the run follows ~/.netrc's default entity — the first exp05
+  # launch (2026-08-04, aborted at step ~50) landed in `model-as-memory`
+  # instead, invisible alongside exp01-04. The credential is a member of both.
+  training_script: src/model_training/train_grpo_v5.py
+  reward_module: src/model_training/reward_v5.py     # pure Python, no torch
+  reward_unit_tests: src/model_training/test_reward_v5.py   # 33 assertions, CPU-only
+  fresh_start: true
+  # NOT resumed from v4 checkpoint-5000: that policy is already entropy-collapsed,
+  # and the changed reward would make its curve incomparable anyway (ADR 0006).
+
+# -----------------------------------------------------------------------------
+# Data
+# -----------------------------------------------------------------------------
+data:
+  train_file: data/training_data_v5_train.jsonl      # 105,596 rows
+  eval_file: data/eval_positions_v5.jsonl            # 502 rows
+  produced_by: prepare_v5_split.py
+  split_params:
+    INPUT_FILE: data/training_data_v4.jsonl          # 113,404 rows (v4 dataset, unchanged)
+    EVAL_TARGET: 500                                 # actual: 502 (whole games are atomic)
+    SEED: 42
+  split_rule: by-source-game
+  # The corpus is 16x augmented (D4 symmetries x color swap). A row-wise random
+  # split would leak symmetry variants of eval positions into training, so entire
+  # source games are held out ("held out by game, evaluated by identity record").
+  # exp01-04 had NO held-out eval at all — this is the first run with one.
+  row_schema: [original_id, user_prompt, katago_evals, root_winrate, root_scoreLead]
+  prompt_token_stats: {min: 350, median: 483, p99: 516, max: 518}  # measured over 3,000 rows, Qwen3 tokenizer
+
+# -----------------------------------------------------------------------------
+# Model
+# -----------------------------------------------------------------------------
+model:
+  base: Qwen/Qwen3-8B
+  enable_thinking: false    # ADR 0003 — native <think> blows the 512-token budget
+                            # before MOVE: (exp02 died exactly this way)
+  lora:                     # unchanged since v3/v4
+    r: 16
+    lora_alpha: 32
+    lora_dropout: 0.05
+    bias: none
+    task_type: CAUSAL_LM
+    target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+  system_prompt: |
+    You are a 9x9 Go (Weiqi) player. Board notation: '.' = empty, 'X' = Black, 'O' = White. Columns: A-J (no I). Rows: 1 (bottom) to 9 (top). You MUST only play on an empty '.' intersection listed in the valid coordinates.
+
+    Respond in exactly this format:
+    REASONING: [2-4 sentences analyzing the position]
+    MOVE: [coordinate, e.g. D4]
+
+# -----------------------------------------------------------------------------
+# GRPOConfig (TRL 1.9.2) — verbatim from train_grpo_v5.py CONFIG
+# `changed:` notes the exp04 value (the last completed run) unless stated.
+# -----------------------------------------------------------------------------
+grpo_config:
+  output_dir: runs/Qwen3-8B-GRPO-Go-Pro-v5
+  run_name: exp05-grpo-v5
+
+  # -- schedule ---------------------------------------------------------------
+  learning_rate: 2.0e-6
+  # changed: exp01-04 all used 5e-6. exp04's own curve shows all effective
+  # learning happened while warmup LR was still below ~2e-6, and late-run
+  # grad_norm rose 0.2 -> 0.7 (instability at higher LR).
+  lr_scheduler_type: constant_with_warmup     # same type as exp02-04
+  warmup_steps: 100
+  # changed: exp02-04 used warmup_ratio=0.02 OF max_steps=270000 = 5,400 warmup
+  # steps, so exp04 (5,220 steps) NEVER LEFT WARMUP. Absolute steps fix that bug.
+  max_steps: 10000
+  # changed: exp02-04 set 270000 as an aspirational ceiling; 10,000 is a real
+  # horizon (~5.5 days measured) paired with the stopping rule below.
+  adam_beta1: 0.9                              # unchanged
+  adam_beta2: 0.99                             # unchanged
+  weight_decay: 0.1                            # unchanged
+  bf16: true                                   # unchanged
+
+  # -- batch geometry ---------------------------------------------------------
+  per_device_train_batch_size: 16              # unchanged from exp03/04
+  num_generations: 16
+  # changed: exp01-04 used 8. 16 halves the chance a whole group picks the same
+  # move (the tie -> zero-variance -> zero-gradient failure), and steadies the
+  # advantage estimate.
+  gradient_accumulation_steps: 8
+  # changed: exp04 used 4. Together: 128 completions per optimizer step
+  # (8 prompt-groups x 16 generations), ~78 GB peak on the 98 GB GPU.
+  # GRPO shape constraint: num_generations must divide evenly into the
+  # effective batch — never tune these three numbers independently.
+  max_completion_length: 512                   # unchanged from exp04 (v4 reclaimed it)
+
+  # -- entropy-preservation package (the heart of exp05) ----------------------
+  temperature: 1.15
+  # changed: exp01-04 ran the silent TRL default 1.0. ProRL-style rollout
+  # diversity: 16 samples collide on one move less often.
+  epsilon: 0.2                                 # unchanged (lower clip bound)
+  epsilon_high: 0.28
+  # changed: exp01-04 had symmetric clipping (epsilon_high unset -> 0.2).
+  # DAPO "clip-higher": raises the ceiling so rare-but-good exploratory tokens
+  # can actually be reinforced.
+  scale_rewards: batch
+  # changed: exp01-04 ran the silent TRL default "group": per-group std
+  # normalization AMPLIFIES gradients of nearly-tied groups — a megaphone for
+  # the least informative samples (Lite PPO). "batch" normalizes globally.
+  loss_type: dapo
+  # unchanged in value — but exp01-04 inherited it as a silent TRL default;
+  # v5 states it explicitly as a conscious choice.
+  beta: 0.0
+  # unchanged in value — explicit now. KL anchor + reference resets are the
+  # designated exp06 escalation (full ProRL recipe) if v5 still collapses.
+  use_adaptive_entropy: true
+  entropy_target: 0.5
+  entropy_coef: 0.01
+  entropy_coef_delta: 0.005
+  # changed: no entropy control existed in exp01-04. Skywork-OR1-style
+  # thermostat: pushes entropy toward 0.5 (exp04's healthy early value was
+  # ~0.55; it collapsed to 0.31). Requires TRL >= 1.8.
+  # Smoke observation: coef auto-decayed 0.005 -> 0 while entropy sat at ~0.65
+  # (above target) — the controller works in both directions.
+
+  # -- evaluation (first run to have any) -------------------------------------
+  eval_strategy: steps
+  eval_steps: 500                              # ~68 min per full 502-position eval
+  per_device_eval_batch_size: 16
+
+  # -- logging / checkpoints --------------------------------------------------
+  logging_steps: 10
+  save_steps: 500                              # unchanged from exp02-04
+  save_total_limit: 6                          # /home budget; ~525 MB per LoRA ckpt
+  report_to: wandb
+
+  # -- throughput -------------------------------------------------------------
+  use_vllm: true
+  # changed: exp01-04 generated in-process (use_vllm=False). Colocate mode,
+  # measured ~40 s/step at full batch geometry. Fallback if vLLM breaks:
+  # set USE_VLLM=False at the top of train_grpo_v5.py (est. 10-12 days).
+  vllm_mode: colocate
+  vllm_gpu_memory_utilization: 0.2
+  vllm_max_model_length: 1280
+  # Without this cap vLLM sizes its KV cache for Qwen3's native 40,960-token
+  # window and refuses to start inside the 0.2 memory budget. Measured need:
+  # prompt <= 518 tokens + 512 completion = 1,030.
+  vllm_enable_sleep_mode: true
+
+# -----------------------------------------------------------------------------
+# Reward stack — three scored layers + one non-scoring logger, summed by TRL.
+# Constants verbatim from reward_v5.py; tests in test_reward_v5.py.
+# -----------------------------------------------------------------------------
+reward:
+  gate:                                        # unchanged since v4
+    no_move_parsed: -1.0
+    illegal_coordinate: -0.5                   # also: malformed board -0.1..-0.8 internals
+    legal_on_empty: 0.0
+    # Graded (not binary) because a binary gate gives no gradient early on.
+  core:                                        # unchanged since v4
+    formula: w_policy * R_policy_log + w_rank * R_rank
+    R_policy_log: "clip((log10(policy)+4)/4, 0, 1)"     # KataGo prior, log-scaled
+    R_rank: "1 - rank/(n-1) by scoreLead over evaluated legal moves"
+    adaptive_weights:
+      closeness: "1 - 2*|root_winrate - 0.5|"
+      w_rank: "0.5 + 0.3*closeness"            # balanced positions lean on rank
+      w_policy: "1 - w_rank"                   # decided positions lean on prior
+  reasoning_layer:                             # NEW in v5 — range [-0.2, +0.05]
+    # Zeroed whenever the gate already failed (no double-counting).
+    # Capped well under the core signal so it can never outbid move quality.
+    consistency_bonus: +0.05                   # chosen coordinate named in REASONING
+    length_window:
+      full_credit_chars: 200                   # exp04 collapsed to ~100 chars
+      max_penalty: -0.10                       # linear below 200; NO bonus above
+      # (v1's version PAID for length 50-800 chars -> padding incentive; v5 only
+      # punishes shortness, so padding buys nothing.)
+    group_dedup:
+      bigram_jaccard_threshold: 0.35           # same-position reasoning overlaps legitimately
+      max_penalty: -0.10                       # linear in excess overlap vs group siblings
+      # Dual role: diversity pressure on the prose AND tie-breaker that revives
+      # zero-variance groups when all 16 generations pick the same move.
+  logging:
+    file: src/model_training/logs/grpo_training_rollouts_v5.jsonl
+    samples: 1 per reward batch, full reward breakdown per sample
+  # Expectation management (ADR 0006 amendment, from re-examining exp01):
+  # exp01's v1 consistency+length term was never gamed, and length held up —
+  # but boilerplate happened anyway. So: length window prevents LENGTH collapse,
+  # not boilerplate; group_dedup is the only NEW bet against boilerplate;
+  # consistency is a cheap tie-breaker with a known, monitored loophole
+  # (coordinate listing — never observed, watch the rollout log).
+
+# -----------------------------------------------------------------------------
+# Environment — every pin here is load-bearing; see Dockerfile comments.
+# -----------------------------------------------------------------------------
+environment:
+  host:
+    server: yumingz5-linux-ml (account tyliu, no sudo, shared GPU)
+    gpu: NVIDIA RTX PRO 6000 Blackwell Workstation Edition, 98 GB, sm_120
+    driver: 570.211.01                         # CUDA 12.8 ceiling — the root constraint
+  image:
+    tag: katago-llm                            # built from repo-root Dockerfile
+    base: pytorch/pytorch:2.8.0-cuda12.9-cudnn9-devel
+    torch: 2.11.0+cu129                        # pip, index download.pytorch.org/whl/cu129
+    vllm: 0.25.1+cu129                         # GitHub release wheel (PyPI wheel is cu130)
+    trl: 1.9.2                                 # WITHOUT [vllm] extra (see Dockerfile 7b)
+    flash_attn: none                           # deliberately absent, see below
+  constraint_chain:
+    # Driver 570 (CUDA 12.8) + no sudo forces everything else:
+    # 1. cu130 wheels cannot initialize on a 12.8 driver -> use cu129 builds
+    #    (CUDA 12.x minor-version compatibility covers 12.9-on-12.8).
+    # 2. vLLM's bundled flash-attention ships PTX-only sm_120 kernels; PTX JIT
+    #    needs driver >= toolchain (12.9) -> permanently unusable here ->
+    #    train_grpo_v5.py monkey-patches attention_backend=FLASHINFER into
+    #    TRL's LLM constructor (TRL 1.9.2 has no passthrough kwarg; the
+    #    VLLM_ATTENTION_BACKEND env var no longer exists in vLLM 0.25.1).
+    # 3. flashinfer JIT-compiles sm_120 SASS in userspace but demands
+    #    container nvcc >= 12.9 -> hence the CUDA 12.9 base image.
+  run_mounts:
+    workspace: /home/tyliu/katago_workspace -> /workspace
+    hf_cache: /home/tyliu/hf_cache_docker -> /root/.cache/huggingface   # holds Qwen3-8B
+    flashinfer_cache: /home/tyliu/flashinfer_cache_docker -> /root/.cache/flashinfer
+    wandb_creds: /home/tyliu/.netrc -> /root/.netrc (ro)
+  disk:
+    "/": docker images + build cache (166 GB, tight — prune build cache after builds)
+    "/home": datasets, checkpoints, HF cache (887 GB)
+
+# -----------------------------------------------------------------------------
+# Launch (verbatim)
+# -----------------------------------------------------------------------------
+launch: |
+  mkdir -p /home/tyliu/flashinfer_cache_docker
+  docker run -d --name exp05 --gpus all \
+    -v /home/tyliu/katago_workspace:/workspace -w /workspace \
+    -v /home/tyliu/hf_cache_docker:/root/.cache/huggingface \
+    -v /home/tyliu/flashinfer_cache_docker:/root/.cache/flashinfer \
+    -v /home/tyliu/.netrc:/root/.netrc:ro \
+    katago-llm sleep infinity
+  docker exec -it exp05 bash
+  tmux new -s exp05
+  python src/model_training/train_grpo_v5.py
+  # reattach after disconnect: docker exec -it exp05 bash && tmux attach -t exp05
+
+# -----------------------------------------------------------------------------
+# Monitoring, stopping, success criteria
+# -----------------------------------------------------------------------------
+protocol:
+  timing: ~40 s/step; ~68 min per full eval; est. 5.5 days for 10k steps
+  stopping_rule: eval reward flat for 4 consecutive evals (2,000 steps) -> stop manually
+  # RETRACTED 2026-08-04: "run-averaged frac_reward_zero_std < 15%" is not
+  # measurable in exp05. scale_rewards="batch" makes that metric a batch-wide
+  # all-or-nothing flag (reads 0.000 always) instead of exp04's per-group
+  # zero-gradient rate. See ADR 0006 "Correction" and docs/WANDB-PANELS.md §2.
+  health_criteria:
+    - entropy holds near the 0.5 target (no sustained decline)   # primary
+    - rewards/reasoning_quality_reward_func/mean does not slide toward -0.2
+      # the dedup term IS a within-group similarity measure -> diversity proxy
+    - completions/mean_length holds ~80-100 tok (exp04 collapsed 90 -> 43)
+    - grad_norm steady (exp04 drifted 0.2 -> 0.7 at lr 5e-6)
+  soft_success_criterion: spot-read rollouts reference the actual position, not templates
+  watch_for:                                   # known-gameable terms (never yet observed)
+    - coordinate listing to farm the consistency bonus
+    - template rotation to dodge the group-dedup penalty
+  post_run: GTP-proxy matches vs base model (deployment pipeline, CLAUDE.md)
+  next_escalation_if_collapse_persists: exp06 = full ProRL recipe
+    # (KL beta=0.001 + periodic reference reset, epsilon_high=0.4, temp 1.2);
+    # exp06 reward candidate: KataGo top-k precision term (ADR 0006 amendment)
+
+# -----------------------------------------------------------------------------
+# Delta summary vs previous experiments (one glance)
+# -----------------------------------------------------------------------------
+# knob                        exp01      exp02/03       exp04        exp05
+# model                       Qwen2.5-7B Qwen3-8B       Qwen3-8B     Qwen3-8B
+# learning_rate               5e-6       5e-6           5e-6         2e-6
+# scheduler                   cosine     const+warmup   const+warmup const+warmup
+# warmup                      ratio 0.1  ratio 0.02(!)  ratio 0.02(!) 100 steps abs
+# max_steps                   1,000      270,000        270,000      10,000 (real)
+# num_generations             8          8              8            16
+# grad_accum                  2          2 / 4          4            8
+# completions per step        16         16 / 64        64           128
+# max_completion_length       1024       512 / 1024     512          512
+# temperature                 1.0*       1.0*           1.0*         1.15
+# epsilon_high                none*      none*          none*        0.28
+# scale_rewards               group*     group*         group*       batch
+# adaptive entropy            no         no             no           yes (target 0.5)
+# reward: reasoning text      v1 length+consistency  none  none      v5 3-term layer
+# held-out eval               none       none           none         502 pos / 500 steps
+# generation backend          in-process in-process     in-process   vLLM colocate
+#   (* = silent TRL default, never consciously chosen before exp05)
