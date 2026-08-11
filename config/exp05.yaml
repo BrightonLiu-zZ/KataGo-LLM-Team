@@ -1,18 +1,32 @@
 # =============================================================================
-# exp05 — full reproducibility snapshot
+# v5 generation (exp05 / exp05b / exp05c) — full reproducibility snapshot
 # =============================================================================
-# First run of the v5 generation: entropy-preserving GRPO config +
-# reasoning-aware reward. Qwen3-8B learns 9x9 Go from KataGo labels.
+# Entropy-preserving GRPO config + reasoning-aware reward. Qwen3-8B learns
+# 9x9 Go from KataGo labels.
 #
-# STATUS  : ready-to-run. Smoke-tested 2026-08-04 (10 steps, healthy metrics).
-#           The real 10,000-step run has NOT been launched yet.
+# STATUS  : COMPLETE. Three runs, one script, one reward module. The first two
+#           were killed by bugs, not by the hypothesis:
+#             exp05  (W&B tijdgbfj, ~1490 steps) — flat at base level.
+#                    Effective step size ~5x too small: scale_rewards="batch"
+#                    (~3x) x TRL's sequence_mask vLLM-IS correction (~0.59x).
+#             exp05b (~2000 steps) — flat again, but the trainer WAS learning
+#                    (‖lora_B‖ 1.05, grad_norm 0.16->0.99). Every rollout and
+#                    eval came from the frozen base policy: TRL 1.9.2 bug
+#                    trl#5312, sleep-mode reload_weights reloading base
+#                    weights from disk each step.
+#             exp05c (W&B lc4hyp23, 6000 steps, stopped 2026-08-11) — SUCCESS.
+#                    Held-out eval core 0.4853 -> 0.5222, then plateaued.
+#           Values below are exp05c's (the config that worked); knobs that
+#           changed mid-generation carry their history inline.
 # AUTHORITY: this file is a hand-maintained SNAPSHOT for reproduction. No code
 #           reads it. The executable source of truth is the CONFIG dict in
 #           src/model_training/train_grpo_v5.py (values below are verbatim
 #           copies) and the constants in src/model_training/reward_v5.py.
 #           If they ever disagree, the scripts win — then fix this file.
-# WHY     : docs/adr/0006-entropy-preserving-grpo-config-v5.md (incl. the
-#           2026-08-03 amendment), evidence in notebooks/exp01-04_analysis.ipynb.
+# WHY     : docs/adr/0006-entropy-preserving-grpo-config-v5.md — the original
+#           rationale plus Amendments 1-5, which root-cause every failure and
+#           justify every mid-generation change. Evidence for the exp04
+#           diagnosis: notebooks/exp01-04_analysis.ipynb.
 # GLOSSARY: CONTEXT.md (experiment vs generation numbering, held-out split,
 #           entropy collapse, reasoning reward, ...).
 #
@@ -22,10 +36,11 @@
 # exp03=drawn-meadow-5 (v3), exp04=fiery-firebrand-6 (v4, checkpoint-5000).
 
 experiment:
-  id: exp05
+  id: exp05c                # exp05 -> exp05b -> exp05c; see STATUS above
   generation: v5            # dataset schema + reward + training script move together
   wandb_project: brighton_zz-uc-san-diego/huggingface
-  wandb_run_name: exp05-grpo-v5
+  wandb_run_name: exp05c-grpo-v5c
+  wandb_run_id: lc4hyp23    # one logical run across restarts (WANDB_RESUME=allow)
   # The entity is pinned via WANDB_ENTITY/WANDB_PROJECT in train_grpo_v5.py.
   # Without it the run follows ~/.netrc's default entity — the first exp05
   # launch (2026-08-04, aborted at step ~50) landed in `model-as-memory`
@@ -82,8 +97,10 @@ model:
 # `changed:` notes the exp04 value (the last completed run) unless stated.
 # -----------------------------------------------------------------------------
 grpo_config:
-  output_dir: runs/Qwen3-8B-GRPO-Go-Pro-v5
-  run_name: exp05-grpo-v5
+  output_dir: runs/Qwen3-8B-GRPO-Go-Pro-v5c
+  # The dead runs left runs/...-v5/checkpoint-{500,1000} and
+  # runs/...-v5b/checkpoint-{500,1000,1500}; kept as evidence.
+  run_name: exp05c-grpo-v5c
 
   # -- schedule ---------------------------------------------------------------
   learning_rate: 2.0e-6
@@ -124,10 +141,21 @@ grpo_config:
   # changed: exp01-04 had symmetric clipping (epsilon_high unset -> 0.2).
   # DAPO "clip-higher": raises the ceiling so rare-but-good exploratory tokens
   # can actually be reinforced.
-  scale_rewards: batch
-  # changed: exp01-04 ran the silent TRL default "group": per-group std
-  # normalization AMPLIFIES gradients of nearly-tied groups — a megaphone for
-  # the least informative samples (Lite PPO). "batch" normalizes globally.
+  scale_rewards: group
+  # exp05 used "batch" (Lite PPO: global normalization instead of the per-group
+  # std that AMPLIFIES nearly-tied groups). REVERTED in exp05b: dividing by the
+  # batch-wide std (~0.4) instead of the per-group std shrank advantages ~3x,
+  # and together with the IS tax below made the run ~5x too slow to learn
+  # inside its own horizon (ADR 0006 Amendment 2). Back to exp01-04's value —
+  # the megaphone effect is real but the dedup term already suppresses
+  # degenerate groups, and 3x of gradient matters more.
+  vllm_importance_sampling_mode: token_truncate
+  # changed in exp05b: TRL's default "sequence_mask" multiplies each sequence's
+  # loss by exp(sum of per-token trainer-vs-vLLM logp diffs). A harmless
+  # ~-0.006/token kernel mismatch over ~90 tokens compounds to a flat x0.59 tax
+  # on EVERY gradient (visible as a constant 0.59 importance_sampling_ratio).
+  # Token-level truncation keeps the correction (~0.994/token) without the
+  # sequence-product amplification. exp05c ran at ~0.99 throughout.
   loss_type: dapo
   # unchanged in value — but exp01-04 inherited it as a silent TRL default;
   # v5 states it explicitly as a conscious choice.
@@ -143,6 +171,11 @@ grpo_config:
   # ~0.55; it collapsed to 0.31). Requires TRL >= 1.8.
   # Smoke observation: coef auto-decayed 0.005 -> 0 while entropy sat at ~0.65
   # (above target) — the controller works in both directions.
+  # exp05c outcome: entropy never fell to the 0.5 target on its own (held
+  # 0.52-0.55 for 6,000 steps), so entropy_coef sat at ~0 essentially the whole
+  # run. The thermostat never had to act — which means the anti-collapse result
+  # is attributable to the OTHER three levers (epsilon_high, temperature,
+  # num_generations=16), not to adaptive entropy. Worth isolating in exp06.
 
   # -- evaluation (first run to have any) -------------------------------------
   eval_strategy: steps
@@ -151,9 +184,23 @@ grpo_config:
 
   # -- logging / checkpoints --------------------------------------------------
   logging_steps: 10
-  save_steps: 500                              # unchanged from exp02-04
-  save_total_limit: 6                          # /home budget; ~525 MB per LoRA ckpt
+  save_steps: 200                              # SEE WARNING — effective value was 500
+  # The script sets 200 (exp02-04 and exp05/05b used 500). Rationale: a crash
+  # costs up to save_steps of progress, and exp05c's second crash came 3.6 h in
+  # while checkpoints were 5.3 h apart, rolling the run back from step 1834 to
+  # 1500 — a run whose checkpoint interval exceeds its crash interval can
+  # livelock forever without ever saving.
+  # WARNING: the change did NOT take effect for exp05c, which resumed from a
+  # checkpoint written under 500. transformers' DefaultFlowCallback reads
+  # state.save_steps (trainer_callback.py:586), and TrainerState.load_from_json()
+  # restores the OLD value from the checkpoint, silently overriding
+  # args.save_steps. Checkpoints stayed 500 apart. Changing save_steps /
+  # eval_steps / logging_steps only takes effect on a FRESH run.
+  save_total_limit: 6                          # /home budget; ~512 MB per LoRA ckpt
   report_to: wandb
+  resume: RESUME_FROM=auto                     # env var; newest ckpt in output_dir
+  # Added after exp05c's first crash: trainer.train() took no arguments and
+  # could not continue a crashed run at all.
 
   # -- throughput -------------------------------------------------------------
   use_vllm: true
@@ -166,7 +213,20 @@ grpo_config:
   # Without this cap vLLM sizes its KV cache for Qwen3's native 40,960-token
   # window and refuses to start inside the 0.2 memory budget. Measured need:
   # prompt <= 518 tokens + 512 completion = 1,030.
-  vllm_enable_sleep_mode: true
+  vllm_enable_sleep_mode: false
+  # exp05/05b ran with true. Disabled 2026-08-09 (ADR 0006 Amendment 5) after
+  # crash #2: `CUDA Error: out of memory at cumem_allocator.cpp:163` inside
+  # sync_weights() -> llm.wake_up(). Sleep level 2 discards vLLM's weights, so
+  # every wake must re-map ~16 GB of PHYSICAL memory while torch holds nearly
+  # the whole card (measured 62.7 GiB allocated vs 85.4 GiB reserved — a
+  # 22.7 GiB fragmentation gap). With sleep off, vLLM allocates once at init
+  # and never re-maps: that failure mode is gone, and so is trl#5312 (both it
+  # and TRL's buggy reload_weights sit behind the same enable_sleep_mode
+  # guard). 12-step smoke: IS ratio 0.9995 vs 0.992, 36.7 s/step vs 38.4.
+  # Cost: steady-state GPU memory 48.6 GB -> 88.7 GB of 97.9 GB (90.6%).
+  # Shared server — coordinate. Levers if a co-tenant needs the room:
+  # PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True first, then
+  # vllm_gpu_memory_utilization below 0.2 (tight: 8B weights alone need ~16 GB).
 
 # -----------------------------------------------------------------------------
 # Reward stack — three scored layers + one non-scoring logger, summed by TRL.
@@ -201,7 +261,7 @@ reward:
       # Dual role: diversity pressure on the prose AND tie-breaker that revives
       # zero-variance groups when all 16 generations pick the same move.
   logging:
-    file: src/model_training/logs/grpo_training_rollouts_v5.jsonl
+    file: src/model_training/logs/grpo_training_rollouts_v5c.jsonl   # v5/v5b for the dead runs
     samples: 1 per reward batch, full reward breakdown per sample
   # Expectation management (ADR 0006 amendment, from re-examining exp01):
   # exp01's v1 consistency+length term was never gamed, and length held up —
@@ -257,20 +317,32 @@ launch: |
     -v /home/tyliu/.netrc:/root/.netrc:ro \
     katago-llm sleep infinity
   docker exec -it exp05 bash
-  tmux new -s exp05
-  python src/model_training/train_grpo_v5.py
-  # reattach after disconnect: docker exec -it exp05 bash && tmux attach -t exp05
+  tmux new -s exp05c
+  # ALWAYS through the wrapper on a multi-day run — random C-extension crashes
+  # are expected (exp05c crash #1: Fatal Python error: none_dealloc at step
+  # 1616, a refcount bug in one of vLLM/FlashInfer/Triton/numba). The wrapper
+  # resumes from the newest checkpoint, keeps one continuous W&B curve, and
+  # aborts instead of restart-looping on a genuinely broken config.
+  WANDB_RUN_ID=lc4hyp23 WANDB_RESUME=allow \
+    bash src/model_training/run_with_restart.sh
+  # detach with Ctrl-B then D (typing `exit` destroys the tmux session)
+  # reattach: docker exec -it exp05 bash && tmux attach -t exp05c
 
 # -----------------------------------------------------------------------------
 # Monitoring, stopping, success criteria
 # -----------------------------------------------------------------------------
 protocol:
-  timing: ~40 s/step; ~68 min per full eval; est. 5.5 days for 10k steps
+  timing: ~36.7 s/step (sleep mode off); ~30 min per full 502-position eval
   stopping_rule: eval reward flat for 4 consecutive evals (2,000 steps) -> stop manually
-  # RETRACTED 2026-08-04: "run-averaged frac_reward_zero_std < 15%" is not
-  # measurable in exp05. scale_rewards="batch" makes that metric a batch-wide
-  # all-or-nothing flag (reads 0.000 always) instead of exp04's per-group
-  # zero-gradient rate. See ADR 0006 "Correction" and docs/WANDB-PANELS.md §2.
+  # CAVEAT learned the hard way: this rule assumes "learned, then plateaued".
+  # A curve that is flat FROM STEP 0 is a bug, not a plateau — triage it with
+  # the recipe in CLAUDE.md Pitfalls ("the flatline family") instead of burning
+  # 2,000 steps waiting. exp05 and exp05b each cost ~1,500-2,000 wasted steps
+  # to that misreading.
+  # frac_reward_zero_std < 15%: retracted 2026-08-04 (unmeasurable under
+  # scale_rewards="batch", which makes it a batch-wide all-or-nothing flag),
+  # REINSTATED for exp05b/05c with the return to "group". exp05c MISSED it —
+  # see results below.
   health_criteria:
     - entropy holds near the 0.5 target (no sustained decline)   # primary
     - rewards/reasoning_quality_reward_func/mean does not slide toward -0.2
@@ -281,15 +353,65 @@ protocol:
   watch_for:                                   # known-gameable terms (never yet observed)
     - coordinate listing to farm the consistency bonus
     - template rotation to dodge the group-dedup penalty
-  post_run: GTP-proxy matches vs base model (deployment pipeline, CLAUDE.md)
-  next_escalation_if_collapse_persists: exp06 = full ProRL recipe
-    # (KL beta=0.001 + periodic reference reset, epsilon_high=0.4, temp 1.2);
-    # exp06 reward candidate: KataGo top-k precision term (ADR 0006 amendment)
+  post_run: GTP-proxy matches vs base model (deployment pipeline, project docs)
+
+# -----------------------------------------------------------------------------
+# Results — exp05c, 6,000 steps, stopped 2026-08-11 (converged)
+# Source: runs/Qwen3-8B-GRPO-Go-Pro-v5c/checkpoint-6000/trainer_state.json
+# -----------------------------------------------------------------------------
+results:
+  held_out_eval_core:          # eval_rewards/katago_composite_reward_func/mean
+    step_500: 0.4853
+    step_1000: 0.5030
+    step_2000: 0.5095
+    step_3000: 0.5112
+    step_4000: 0.5124
+    step_5000: 0.5222          # BEST — use this checkpoint, not the last one
+    step_5500: 0.5216
+    step_6000: 0.5211
+  best_checkpoint: runs/Qwen3-8B-GRPO-Go-Pro-v5c/checkpoint-5000
+  train_core: 0.401 -> 0.515   # ~1.5x exp04's rate over the comparable span
+  convergence: |
+    Gain rate fell ~7x: +0.024 over steps 500-2000 vs +0.0033 over 4500-6000,
+    with the last three evals flat-to-slightly-down. Stopped one eval short of
+    the formal 4-eval rule; the trend was unambiguous.
+  verdict_on_the_hypothesis: |
+    CONFIRMED. exp04's failure was one mechanism (entropy 0.55->0.31 ==
+    length 90->43 == 61% zero-gradient groups). exp05c held entropy ~0.53 and
+    length ~88-95 for 6,000 steps WHILE still learning. Anti-collapse does not
+    cost learning signal — the open question from the original ADR.
+  open_problems:
+    frac_reward_zero_std: |
+      Climbed 0.17 -> 0.53 monotonically and never stopped, blowing past the
+      <15% criterion and exp04's ~29%. But entropy and length are flat, so this
+      is NOT exp04's collapse: the policy has converged to one move in most
+      positions and all 16 generations tie. Same phenomenon as the eval
+      plateau, seen from the gradient side.
+    dedup_term_never_fired: |
+      rewards/reasoning_quality_reward_func/mean sat at 0.0499 -> 0.0500 with
+      std 0.0011 -> 0.0002 for the whole run. The ceiling is +0.05, so EVERY
+      generation earned full marks: the length penalty and the group-dedup
+      penalty never triggered once. Yet 400 sampled rollouts had only 133
+      unique 6-word openings, with "The current position shows a complex"
+      repeated 67x. bigram_jaccard_threshold=0.35 is far too lax.
+      Consequence: the mechanism ADR 0006 designated as THE ONLY NEW BET
+      against boilerplate — and the tie-breaker meant to revive zero-variance
+      groups — was inert, which plausibly explains the item above.
+  exp06_leads:
+    - Measure the actual bigram-Jaccard distribution across sibling generations
+      and set the threshold from data. Most concrete lever available.
+    - Isolate which anti-collapse lever did the work (adaptive entropy never
+      engaged — see entropy notes above).
+    - KataGo top-k precision term on the reasoning text (ADR 0006 amendment).
+    - Full ProRL recipe (KL beta=0.001 + periodic reference reset,
+      epsilon_high=0.4, temp 1.2) remains the escalation if collapse returns.
+    - Have logging_reward_func compute per-group reward std itself, so the
+      metric stops depending on scale_rewards (ADR 0006 Correction).
 
 # -----------------------------------------------------------------------------
 # Delta summary vs previous experiments (one glance)
 # -----------------------------------------------------------------------------
-# knob                        exp01      exp02/03       exp04        exp05
+# knob                        exp01      exp02/03       exp04        exp05c
 # model                       Qwen2.5-7B Qwen3-8B       Qwen3-8B     Qwen3-8B
 # learning_rate               5e-6       5e-6           5e-6         2e-6
 # scheduler                   cosine     const+warmup   const+warmup const+warmup
@@ -301,9 +423,14 @@ protocol:
 # max_completion_length       1024       512 / 1024     512          512
 # temperature                 1.0*       1.0*           1.0*         1.15
 # epsilon_high                none*      none*          none*        0.28
-# scale_rewards               group*     group*         group*       batch
-# adaptive entropy            no         no             no           yes (target 0.5)
+# scale_rewards               group*     group*         group*       group (exp05: batch)
+# vllm IS mode                n/a        n/a            n/a          token_truncate
+# adaptive entropy            no         no             no           yes (never engaged)
 # reward: reasoning text      v1 length+consistency  none  none      v5 3-term layer
 # held-out eval               none       none           none         502 pos / 500 steps
-# generation backend          in-process in-process     in-process   vLLM colocate
+# generation backend          in-process in-process     in-process   vLLM colocate, no sleep
 #   (* = silent TRL default, never consciously chosen before exp05)
+#
+# Outcome, scale-free: exp04 entropy 0.55->0.31, length 90->43, zero-grad 61%.
+# exp05c entropy ~0.53 flat, length ~88-95 flat, zero-grad 17%->53%,
+# held-out eval core 0.4853->0.5222.
