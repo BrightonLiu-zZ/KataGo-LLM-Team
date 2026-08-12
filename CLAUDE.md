@@ -422,7 +422,7 @@ alone. **Before committing to any multi-day run, do the pre-flight below.**
 |------|----------|----------|
 | [brightonliuzZ/qwen3-8b-go-v4](https://huggingface.co/brightonliuzZ/qwen3-8b-go-v4) | Full-precision merged model + `qwen3-8b-go-v4-Q4_K_M.gguf` | **Primary deployment model** |
 | [brightonliuzZ/qwen2.5-7b-go](https://huggingface.co/brightonliuzZ/qwen2.5-7b-go) | Legacy 7B full-precision merged model + `qwen-7b-go-Q4_K_M.gguf` | Legacy deployment |
-| [brightonliuzZ/grpo-go-checkpoints](https://huggingface.co/brightonliuzZ/grpo-go-checkpoints) | Raw LoRA checkpoints: `v1/checkpoint-800`, `v2/checkpoint-1000`, `v3/checkpoint-500` | Resuming / research |
+| [brightonliuzZ/grpo-go-checkpoints](https://huggingface.co/brightonliuzZ/grpo-go-checkpoints) | Raw LoRA checkpoints, full and resumable (adapter + optimizer + scheduler + RNG): `v1/checkpoint-800`, `v2/checkpoint-1000`, `v3/checkpoint-500`, `v4/checkpoint-{1500,5000}`, **`v5c/checkpoint-5000`** (exp05c, best held-out eval). Folder names mirror the local `runs/…-<suffix>/` directory, **not** the CONTEXT.md generation numbering | Resuming / research |
 | [brightonliuzZ/katago-grpo-datasets](https://huggingface.co/datasets/brightonliuzZ/katago-grpo-datasets) | `training_data_augmented_v3.jsonl` | Data / research |
 | [brightonliuzZ/qwen2.5-7b-and-qwen3-8b-go-GGUF-legacy](https://huggingface.co/brightonliuzZ/qwen2.5-7b-and-qwen3-8b-go-GGUF-legacy) | Older GGUF releases | Historical reference |
 
@@ -540,12 +540,19 @@ intermediates were deleted as regenerable.
 
 ### Known gaps to close
 
-- `checkpoint-5000` has never been merged, quantized or played against. The
-  published GGUF is from the lost `checkpoint-3000`, so the best surviving
-  adapter is currently unexercised.
-- `checkpoint-1500` and `checkpoint-5000` exist only on this server. Upload them
-  to `brightonliuzZ/grpo-go-checkpoints` — that is the exact gap that made
+- ~~`checkpoint-1500` and `checkpoint-5000` exist only on this server~~ —
+  **closed 2026-08-11:** v4's two checkpoints and v5c's `checkpoint-5000` are
+  now on `brightonliuzZ/grpo-go-checkpoints`. Upload any new best checkpoint
+  as soon as it exists; single-copy-on-this-server is exactly what made v4's
   `checkpoint-3000` unrecoverable.
-- v4 training reached epoch 0.35 of a 270,000-step schedule. Resuming is possible
-  from `checkpoint-5000` but needs `data/training_data_v4.jsonl`, which is now
-  back in place.
+- **No v5c model has been merged, quantized or played against.** The published
+  GGUF is still v4's, built from the lost `checkpoint-3000`. `v5c/checkpoint-5000`
+  is the best adapter the project has ever produced (held-out eval core 0.5222
+  vs v4's collapsed policy) and is entirely unexercised — the deployment
+  pipeline in "Edge deployment" has never been run on it. v4's own
+  `checkpoint-5000` is likewise unmerged.
+- **exp05c's numbers have never been checked against actual play.** All
+  evidence is reward-model-internal; a GTP match vs the base model (and vs the
+  v4 GGUF) is the only external validation the project has.
+- v4 training reached epoch 0.35 of a 270,000-step schedule; v5c reached epoch
+  0.45 of its own. Resuming either is possible from the checkpoints above.
