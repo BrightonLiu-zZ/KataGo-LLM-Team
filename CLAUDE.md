@@ -135,7 +135,7 @@ decayed 1.0→0.66 = sync broken again) — currently 0.992; core-reward slope �
 holding; `frac_reward_zero_std` — **at ~23%, above the <15% target**, flat
 since step 750; sustained growth past ~30% means exp04's collapse is back.
 ```bash
-python prepare_v5_split.py                       # once: leakage-safe train/eval split
+python src/data_acquiring/get_train_ready_data/prepare_v5_split.py   # once: leakage-safe train/eval split
 
 # Long runs: always launch through the wrapper. exp05c hit a random C-extension
 # crash (`none_dealloc`) at step 1616; the wrapper resumes from the newest
@@ -275,7 +275,7 @@ See **`src/interception/GTP_PROXY_GUIDE.md`** for full setup guide.
 | `run_katago_analysis.py` | `KATAGO_EXE`, `CONFIG_FILE`, `MODEL_FILE`, `MAX_LIMIT` (default 100) |
 | `train_grpo_v5.py` | `TRAIN_DATASET_PATH`, `EVAL_DATASET_PATH`, `OUTPUT_DIR`, `USE_VLLM`; env `RESUME_FROM` |
 | `run_with_restart.sh` | env `MAX_RESTARTS`, `MIN_HEALTHY_SECONDS`, `WANDB_RUN_ID` (reads `OUTPUT_DIR` from the trainer) |
-| `prepare_v5_split.py` | `INPUT_FILE`, `EVAL_TARGET`, `SEED` |
+| `src/data_acquiring/get_train_ready_data/prepare_v5_split.py` | `INPUT_FILE`, `EVAL_TARGET`, `SEED` |
 | `train_grpo_v4.py` | `DATASET_PATH`, `OUTPUT_DIR` |
 | `train_grpo_v3.py` | `DATASET_PATH`, `OUTPUT_DIR` |
 | `train_grpo.py` | `DATASET_PATH`, `OUTPUT_DIR` |
