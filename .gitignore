@@ -67,3 +67,10 @@ __pycache__/
 # top-level `data/` rule would otherwise swallow
 !notebooks/data/
 !notebooks/data/**
+
+# OGS bot secrets and rendered per-bot configs
+config/ogs/keys.env
+config/ogs/bot-base.json5
+config/ogs/bot-v4.json5
+config/ogs/bot-v5c.json5
+src/rank_eval/logs/
