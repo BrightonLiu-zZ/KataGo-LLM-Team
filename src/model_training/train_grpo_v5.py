@@ -24,7 +24,8 @@ docs/adr/0006-entropy-preserving-grpo-config-v5.md. Summary:
     - schedule: lr 2e-6, warmup_steps=100 (absolute), max_steps=10,000 (real horizon)
     - batch: num_generations 16, grad_accum 8 (128 completions = 8 groups/step)
     - throughput: vLLM colocate + sleep mode (fallback: set USE_VLLM = False)
-    - eval: leakage-safe held-out set every 500 steps (prepare_v5_split.py)
+    - eval: leakage-safe held-out set every 500 steps
+      (src/data_acquiring/get_train_ready_data/prepare_v5_split.py)
 
 Requires TRL >= 1.8 (adaptive entropy). The script fails fast with a clear
 message if the installed GRPOConfig does not support an agreed-upon knob.
@@ -325,8 +326,8 @@ def build_config():
 
 def main():
     for path, hint in [
-        (TRAIN_DATASET_PATH, "Run prepare_v5_split.py first."),
-        (EVAL_DATASET_PATH, "Run prepare_v5_split.py first."),
+        (TRAIN_DATASET_PATH, "Run src/data_acquiring/get_train_ready_data/prepare_v5_split.py first."),
+        (EVAL_DATASET_PATH, "Run src/data_acquiring/get_train_ready_data/prepare_v5_split.py first."),
     ]:
         if not os.path.exists(path):
             print(f"Error: {path} not found. {hint}")
