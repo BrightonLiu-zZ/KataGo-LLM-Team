@@ -1,0 +1,85 @@
+// gtp2ogs settings shared by the three research bots (base / v4 / v5c).
+// The per-bot files (bot-*.json5) are generated from this template by
+// src/rank_eval/ogs_bots.sh — edit HERE, then run `ogs_bots.sh render`.
+// Reference: https://github.com/online-go/gtp2ogs/blob/devel/example_config.json5
+{
+  // engine description recorded with every game
+  engine: "__ENGINE__",
+
+  bot: {
+    command: ["python3", "__REPO__/src/rank_eval/llm_gtp.py",
+              "--model", "__MODEL__",
+              "--base-url", "http://127.0.0.1:8100/v1",
+              "--temperature", "0.6", "--top-p", "0.95",
+              "--n-samples", "8", "--max-attempts", "2",
+              "--valid-list", "legal",
+              "--chat", "main",          // one chat message per move (see send_chats below)
+              "--log-dir", "__REPO__/src/rank_eval/logs/ogs",
+              "--label", "__LABEL__"],
+    manager: "persistent",     // one engine process per concurrent game
+    instances: 2,
+    send_chats: true,          // forward "MAIN: ..." lines from the engine's stderr to the game chat
+    send_pv_data: false,
+    quit_grace_period: 5000,
+  },
+
+  // GnuGo decides WHEN TO PASS / RESIGN; the LLM never resigns on its own and
+  // only passes when it cannot produce a legal move. Consulted after 35% of the
+  // board area in moves (~28 moves on 9x9); resign after 3 consecutive votes.
+  ending_bot: {
+    command: ["__HOME__/.local/bin/gnugo", "--mode", "gtp", "--level", "10",
+              "--capture-all-dead"],
+    manager: "pool",           // NOT persistent: gtp2ogs assumes a persistent bot's own
+    instances: 4,              // genmove was played, which is false for an ending bot
+    allowed_resigns: 3,
+    moves_to_allow_before_checking_ratio: 0.35,
+  },
+
+  greeting: {
+    en: "Hi! I am a research bot: a language model (Qwen3-8B) fine-tuned with RL to play 9x9 Go, no search. Moves are its raw answers, and it will explain each one here in the chat. At the end I would love to hear what you thought. Good luck, have fun!",
+    "zh-cn": "\u4f60\u597d\uff01\u6211\u662f\u4e00\u4e2a\u7814\u7a76\u7528\u673a\u5668\u4eba\uff1a\u7528\u5f3a\u5316\u5b66\u4e60\u5fae\u8c03\u8fc7\u7684\u8bed\u8a00\u6a21\u578b\uff08Qwen3-8B\uff09\u4e0b 9 \u8def\u56f4\u68cb\uff0c\u6ca1\u6709\u641c\u7d22\u3002\u6bcf\u4e00\u624b\u90fd\u4f1a\u5728\u804a\u5929\u91cc\u8bf4\u660e\u7406\u7531\u3002\u5bf9\u5c40\u7ed3\u675f\u540e\u5f88\u60f3\u542c\u542c\u4f60\u7684\u610f\u89c1\u3002\u795d\u5bf9\u5c40\u6109\u5feb\uff01",
+    "zh-tw": "\u4f60\u597d\uff01\u6211\u662f\u4e00\u500b\u7814\u7a76\u7528\u6a5f\u5668\u4eba\uff1a\u7528\u5f37\u5316\u5b78\u7fd2\u5fae\u8abf\u904e\u7684\u8a9e\u8a00\u6a21\u578b\uff08Qwen3-8B\uff09\u4e0b 9 \u8def\u570d\u68cb\uff0c\u6c92\u6709\u641c\u5c0b\u3002\u6bcf\u4e00\u624b\u90fd\u6703\u5728\u804a\u5929\u88e1\u8aaa\u660e\u7406\u7531\u3002\u5c0d\u5c40\u7d50\u675f\u5f8c\u5f88\u60f3\u807d\u807d\u4f60\u7684\u610f\u898b\u3002\u795d\u5c0d\u5c40\u6109\u5feb\uff01",
+  },
+  // Sent when the game ends -- the point of the whole exercise: ask the human
+  // for feedback.  Replies (including ones typed after the game) are logged by
+  // gtp2ogs thanks to log_game_chat, and collected by ogs_feedback.py.
+  farewell: {
+    en: "Thanks for the game! Feedback would really help this research bot: how strong did it feel (in kyu), what was its worst move, and what should it learn next? Just type it here in the chat -- I read every reply.",
+    "zh-cn": "\u8c22\u8c22\u5bf9\u5c40\uff01\u5982\u679c\u65b9\u4fbf\uff0c\u8bf7\u5728\u804a\u5929\u91cc\u7ed9\u70b9\u53cd\u9988\uff1a\u4f60\u89c9\u5f97\u5b83\u5927\u6982\u4ec0\u4e48\u6c34\u5e73\uff08\u51e0\u7ea7\uff09\uff1f\u6700\u5dee\u7684\u4e00\u624b\u662f\u54ea\u4e00\u624b\uff1f\u63a5\u4e0b\u6765\u5b83\u6700\u9700\u8981\u5b66\u4ec0\u4e48\uff1f\u4f60\u7684\u56de\u590d\u6211\u90fd\u4f1a\u770b\u3002",
+    "zh-tw": "\u8b1d\u8b1d\u5c0d\u5c40\uff01\u5982\u679c\u65b9\u4fbf\uff0c\u8acb\u5728\u804a\u5929\u88e1\u7d66\u9ede\u56de\u994b\uff1a\u4f60\u89ba\u5f97\u5b83\u5927\u6982\u4ec0\u9ebc\u6c34\u5e73\uff08\u5e7e\u7d1a\uff09\uff1f\u6700\u5dee\u7684\u4e00\u624b\u662f\u54ea\u4e00\u624b\uff1f\u63a5\u4e0b\u4f86\u5b83\u6700\u9700\u8981\u5b78\u4ec0\u9ebc\uff1f\u4f60\u7684\u56de\u8986\u6211\u90fd\u6703\u770b\u3002",
+  },
+  farewellscore: false,
+
+  allowed_board_sizes: [9],
+  allow_ranked: true,
+  allow_unranked: true,      // the "Play vs computer" panel sends unranked by default
+  allowed_rank_range: ["30k", "9p"],
+  allow_ranked_handicap: true,    // "Handicap: standard" is the OGS default; refusing it
+  allow_unranked_handicap: true,  // greys the bot out in the play panel for most users
+  allowed_komi_range: [-99, 99],  // automatic komi arrives as null/0 and handicap games use 0.5
+  max_games_per_player: 1,
+  min_move_time: 1500,
+
+  allowed_time_control_systems: ["fischer", "byoyomi", "simple"],
+  allowed_blitz_settings: null,            // 9x9 blitz is 30s+5s — too tight for ~1-3 s/move sampling
+  allowed_rapid_settings: {
+    simple:  { per_move_time_range: [5, 30] },
+    byoyomi: { main_time_range: [0, 3600], period_time_range: [5, 30], periods_range: [1, 10] },
+    fischer: { initial_time_range: [5, 600], max_time_range: [5, 7200], time_increment_range: [3, 30] },
+    concurrent_games: 2,
+  },
+  allowed_live_settings: {
+    simple:  { per_move_time_range: [10, 300] },
+    byoyomi: { main_time_range: [0, 3600], period_time_range: [10, 300], periods_range: [1, 10] },
+    fischer: { initial_time_range: [10, 3600], max_time_range: [5, 7200], time_increment_range: [10, 300] },
+    concurrent_games: 2,
+  },
+  allowed_correspondence_settings: null,   // never: would block pausing
+
+  hidden: false,
+  decline_new_challenges: __DECLINE__,     // toggled live by `ogs_bots.sh drain|undrain`
+  logfile: "__REPO__/src/rank_eval/logs/ogs/gtp2ogs-__LABEL__.log",
+  log_game_chat: true,     // opponent replies (incl. after the game) land in the logfile
+  verbosity: 1,
+  status_update_frequency: 60000,
+}
