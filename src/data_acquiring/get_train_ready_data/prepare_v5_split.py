@@ -14,7 +14,7 @@ into training, so the split is by SOURCE GAME:
 
 Run from the repository root:
 
-    python prepare_v5_split.py
+    python src/data_acquiring/get_train_ready_data/prepare_v5_split.py
 """
 import json
 import random
